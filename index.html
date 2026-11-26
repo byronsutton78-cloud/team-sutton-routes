@@ -45,7 +45,8 @@ input[type=number],input[type=text],input[type=password]{width:100%;font:inherit
 .seg button[aria-pressed=true]{background:#2a1a15;border-color:var(--acc);color:#fff}
 .row{display:flex;gap:8px;align-items:center}
 .sw{display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:8px 12px;margin-top:8px}
-.sw input{width:24px;height:24px;accent-color:var(--acc)}
+.sw input[type=checkbox]{width:24px;height:24px;accent-color:var(--acc)}
+#bn input{width:100%;height:auto;min-height:44px;font-size:16px}
 .opt{display:block;width:100%;text-align:left;background:var(--card);border:1px solid var(--line);border-left:6px solid var(--c);border-radius:14px;padding:10px 12px;margin-top:10px}
 .opt[aria-pressed=true]{border-color:var(--c);box-shadow:0 0 0 1px var(--c) inset}
 .opt b{font-size:17px}
@@ -120,13 +121,14 @@ a{color:#7fb2ff}
     <button type="button" data-m="road">🚧 Draw a road</button>
   </div>
   <details class="sw" style="display:block" id="bn"><summary style="cursor:pointer;min-height:32px;display:flex;align-items:center">✍️ Block a road by name</summary>
-    <label class="t" for="bn_road">Road</label><input id="bn_road" type="text" placeholder="e.g. Kruis Road" autocomplete="off">
-    <label class="t" for="bn_a">From the corner with</label><input id="bn_a" type="text" placeholder="e.g. Perryn Street" autocomplete="off">
-    <label class="t" for="bn_b">To the corner with</label><input id="bn_b" type="text" placeholder="e.g. Bottelary Road" autocomplete="off">
+    <label class="t" for="bn_road">Road</label><input id="bn_road" type="text" autocapitalize="words" autocorrect="off" spellcheck="false" enterkeyhint="next" placeholder="e.g. Kruis Road" autocomplete="off">
+    <label class="t" for="bn_a">From the corner with</label><input id="bn_a" type="text" autocapitalize="words" autocorrect="off" spellcheck="false" enterkeyhint="next" placeholder="e.g. Perryn Street" autocomplete="off">
+    <label class="t" for="bn_b">To the corner with</label><input id="bn_b" type="text" autocapitalize="words" autocorrect="off" spellcheck="false" enterkeyhint="next" placeholder="e.g. Bottelary Road" autocomplete="off">
     <div style="margin-top:10px"><button type="button" id="bn_go" style="width:100%">Block this stretch</button></div>
   </details>
   <div class="k" id="blkHint" style="margin-top:6px">Routes won't run along a blocked road, but they can still cross it.</div>
   <div id="blkList"></div>
+  <div class="k" id="blkSync" style="margin-top:6px" hidden>Saved on this phone or computer and used every time. <button type="button" id="b_sync" style="min-height:36px;margin-left:4px">🔗 Copy to my other devices</button></div>
   <label class="sw"><span>Avoid schools, parks &amp; estates<br><span class="k">Keeps routes out of school grounds, parks, golf courses and gated estates</span></span><input type="checkbox" id="areas"></label>
 
   <div style="margin-top:14px"><button type="button" class="pri" id="b_go">Find 3 routes</button></div>
@@ -270,11 +272,22 @@ function drawBlocks(){blkLayer.clearLayers();
   st.blocks.forEach(b=>{if(b.type==='spot')L.polygon(ring(b).map(c=>[c[1],c[0]]),{color:'#e04a4a',weight:2,fillOpacity:.35}).addTo(blkLayer);
     else L.polyline(b.line,{color:'#e04a4a',weight:9,opacity:.5,lineCap:'round'}).addTo(blkLayer)});
   $('#blkList').innerHTML=st.blocks.length?st.blocks.map((b,i)=>`<div class="blk"><span>${b.type==='spot'?'🚫 Spot '+(i+1):'🚧 '+esc(b.name||'Road '+(i+1))}</span><span class="row"><button type="button" data-bs="${i}">Show</button><button type="button" data-bd="${i}" aria-label="Remove">✕</button></span></div>`).join('')+
-    (st.blocks.length>1?'<div style="margin-top:6px"><button type="button" data-bc="1">Clear all</button></div>':''):''}
+    (st.blocks.length>1?'<div style="margin-top:6px"><button type="button" data-bc="1">Clear all</button></div>':''):'';
+  $('#blkSync').hidden=!st.blocks.length}
 $('#blkList').onclick=e=>{const s=e.target.closest('[data-bs]'),d=e.target.closest('[data-bd]'),c=e.target.closest('[data-bc]');
   if(s){const b=st.blocks[+s.dataset.bs];setFs(true);setTimeout(()=>b.type==='spot'?map.setView(b.pts[0],17):map.fitBounds(L.latLngBounds(b.line),{padding:[40,40]}),120)}
   if(d){st.blocks.splice(+d.dataset.bd,1);LS.set('blocks',st.blocks);drawBlocks()}
   if(c){if(!c.dataset.arm){c.dataset.arm=1;c.textContent='Tap again to clear all';return}st.blocks=[];LS.set('blocks',st.blocks);drawBlocks()}};
+function syncLink(){const s=btoa(unescape(encodeURIComponent(JSON.stringify(st.blocks))));return location.origin+location.pathname+'#blocks='+s}
+$('#b_sync').onclick=async()=>{const u=syncLink();
+  try{if(navigator.share){await navigator.share({title:'Team Sutton blocked roads',url:u});return}}catch(e){if(e&&e.name==='AbortError')return}
+  try{await navigator.clipboard.writeText(u);toast('Link copied. Open it on your other device to add the same blocks.')}catch(e){prompt('Copy this link and open it on your other device:',u)}};
+// opening a sync link merges its blocks into this device's list
+(()=>{const m=location.hash.match(/blocks=([^&]+)/);if(!m)return;
+  try{const inc=JSON.parse(decodeURIComponent(escape(atob(m[1]))));const key=b=>JSON.stringify(b.pts||b.line);let n=0;
+    inc.forEach(b=>{if(b&&(b.pts||b.line)&&!st.blocks.some(x=>key(x)===key(b))){st.blocks.push(b);n++}});
+    LS.set('blocks',st.blocks);history.replaceState(null,'',location.pathname+location.search);setTimeout(()=>toast(n?`Added ${n} blocked road${n>1?'s':''} and spot${n>1?'s':''} from your other device`:'These blocks are already on this device'),600)}
+  catch(e){setTimeout(()=>toast('That sync link was not complete. Copy it again.'),600)}})();
 function addBlock(b){st.blocks.push(b);LS.set('blocks',st.blocks);drawBlocks();setMode('start');toast(isFs()?'Blocked. Add more, or tap Done and then Find routes.':'Blocked. Tap Find routes to re-plan around it.')}
 // follow the actual road between the tapped points
 async function snapRoad(pts){try{const j=await orsPost('driving-car',{coordinates:pts.map(p=>[p[1],p[0]]),instructions:false,preference:'shortest'});
