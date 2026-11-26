@@ -74,7 +74,9 @@ a{color:#7fb2ff}
 <div id="fshint" role="status"></div>
 <div id="fsbar">
   <button type="button" data-m="spot">🚫 Block spot</button>
-  <button type="button" data-m="stretch">🚧 Block road</button>
+  <button type="button" data-m="road">🚧 Draw road</button>
+  <button type="button" id="fs_undo" hidden>↶ Undo</button>
+  <button type="button" id="fs_fin" class="done" hidden>✓ Finish road</button>
   <button type="button" class="done" id="fs_done">Done</button>
 </div>
 <main>
@@ -109,10 +111,17 @@ a{color:#7fb2ff}
   <label class="t">Roads &amp; places to avoid</label>
   <div class="seg" id="blk">
     <button type="button" data-m="spot">🚫 Block a spot</button>
-    <button type="button" data-m="stretch">🚧 Block a road</button>
+    <button type="button" data-m="road">🚧 Draw a road</button>
   </div>
-  <div class="k" id="blkHint" style="margin-top:6px">Block a fuel station or a busy stretch of road and routes will go around it. Blocking a road also stops routes crossing it along that stretch.</div>
+  <details class="sw" style="display:block" id="bn"><summary style="cursor:pointer;min-height:32px;display:flex;align-items:center">✍️ Block a road by name</summary>
+    <label class="t" for="bn_road">Road</label><input id="bn_road" type="text" placeholder="e.g. Kruis Road" autocomplete="off">
+    <label class="t" for="bn_a">From the corner with</label><input id="bn_a" type="text" placeholder="e.g. Perryn Street" autocomplete="off">
+    <label class="t" for="bn_b">To the corner with</label><input id="bn_b" type="text" placeholder="e.g. Bottelary Road" autocomplete="off">
+    <div style="margin-top:10px"><button type="button" id="bn_go" style="width:100%">Block this stretch</button></div>
+  </details>
+  <div class="k" id="blkHint" style="margin-top:6px">Routes won't run along a blocked road, but they can still cross it.</div>
   <div id="blkList"></div>
+  <label class="sw"><span>Avoid schools, parks &amp; estates<br><span class="k">Keeps routes out of school grounds, parks, golf courses and gated estates</span></span><input type="checkbox" id="areas"></label>
 
   <div style="margin-top:14px"><button type="button" class="pri" id="b_go">Find 3 routes</button></div>
   <div id="err"></div>
@@ -193,46 +202,104 @@ function setStart(ll,fly){st.start=[+ll[0].toFixed(6),+ll[1].toFixed(6)];LS.set(
   $('#startTxt').textContent=`Start set (${st.start[0].toFixed(4)}, ${st.start[1].toFixed(4)}). Drag the pin or tap the map to move it.`;
   if(fly)map.setView(st.start,15)}
 if(st.start)setStart(st.start);
-let mode='start',stretchA=null,tmpPin=null;const blkLayer=L.layerGroup().addTo(map);
-const DEF_HINT=$('#blkHint').textContent;
-function setMode(m){mode=m;stretchA=null;if(tmpPin){map.removeLayer(tmpPin);tmpPin=null}
-  document.querySelectorAll('#blk button').forEach(b=>b.classList.toggle('on',b.dataset.m===m));
-  $('#blkHint').textContent=m==='spot'?'Tap the map on the spot to block (for example the fuel station).':m==='stretch'?'Tap one end of the road stretch to block.':DEF_HINT;
-  document.querySelectorAll('#fsbar [data-m]').forEach(b=>b.classList.toggle('on',b.dataset.m===m));
-  $('#fshint').textContent=m==='start'?'Pinch to zoom. Tap a route to select it, or block a spot or road below.':$('#blkHint').textContent;
+let mode='start',draft=[];const blkLayer=L.layerGroup().addTo(map),draftLayer=L.layerGroup().addTo(map),areaLayer=L.layerGroup().addTo(map);
+const DEF_HINT=$('#blkHint').textContent,FS_HINT='Pinch to zoom. Tap a route to select it, or block a spot or draw a road below.';
+// older straight-line blocks become road lines
+st.blocks=st.blocks.map(b=>b.type==='stretch'?{type:'road',line:b.pts}:b);
+const HINT={spot:'Tap the spot to block, for example the fuel station.',road:'Tap the start corner, then a few points along the road, then the end corner. Then tap ✓ Finish road.'};
+function setMode(m){mode=m;draft=[];draftLayer.clearLayers();
+  document.querySelectorAll('#blk button,#fsbar [data-m]').forEach(b=>b.classList.toggle('on',b.dataset.m===m));
+  $('#fs_undo').hidden=$('#fs_fin').hidden=m!=='road';$('#fs_done').hidden=m==='road';
+  $('#blkHint').textContent=HINT[m]||DEF_HINT;$('#fshint').textContent=HINT[m]||FS_HINT;
   if(m!=='start'&&!isFs())setFs(true)}
 const isFs=()=>document.body.classList.contains('fsm');
 function setFs(on){document.body.classList.toggle('fsm',on);$('#map').classList.toggle('fs',on);
   if(fsCtl)fsCtl.textContent=on?'✕ Close':'⤢ Full screen';if(!on&&mode!=='start')setMode('start');
-  if(on)$('#fshint').textContent=mode==='start'?'Pinch to zoom. Tap a route to select it, or block a spot or road below.':$('#blkHint').textContent;
+  if(on)$('#fshint').textContent=HINT[mode]||FS_HINT;
   setTimeout(()=>{map.invalidateSize();if(!on&&lines[st.sel])map.fitBounds(lines[st.sel].getBounds(),{padding:[24,24]})},80)}
 let fsCtl=null;
 const FsC=L.Control.extend({options:{position:'topright'},onAdd(){const b=L.DomUtil.create('button','fsbtn');b.type='button';b.textContent='⤢ Full screen';
   L.DomEvent.disableClickPropagation(b);b.onclick=()=>setFs(!isFs());fsCtl=b;return b}});
 map.addControl(new FsC());
-$('#fsbar').onclick=e=>{const b=e.target.closest('button');if(!b)return;if(b.id==='fs_done'){setFs(false);return}setMode(mode===b.dataset.m?'start':b.dataset.m)};
+$('#fsbar').onclick=e=>{const b=e.target.closest('button');if(!b)return;
+  if(b.id==='fs_done'){setFs(false);return}
+  if(b.id==='fs_undo'){draft.pop();drawDraft();return}
+  if(b.id==='fs_fin'){finishRoad();return}
+  setMode(mode===b.dataset.m?'start':b.dataset.m)};
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&isFs())setFs(false)});
 $('#blk').onclick=e=>{const b=e.target.closest('button');if(!b)return;setMode(mode===b.dataset.m?'start':b.dataset.m)};
-function ring(b){const la=b.pts[0][0],mLat=110540,mLng=111320*Math.cos(la*Math.PI/180),o=[];
-  if(b.type==='spot'){const [y,x]=b.pts[0],r=40;for(let i=0;i<12;i++){const a=2*Math.PI*i/12;o.push([x+r*Math.sin(a)/mLng,y+r*Math.cos(a)/mLat])}}
-  else{const [a,c]=b.pts,dx=(c[1]-a[1])*mLng,dy=(c[0]-a[0])*mLat,Ln=Math.hypot(dx,dy)||1,w=14,px=-dy/Ln*w,py=dx/Ln*w,ex=dx/Ln*10,ey=dy/Ln*10;
-    const P=(p,ox,oy)=>[p[1]+ox/mLng,p[0]+oy/mLat];o.push(P(a,px-ex,py-ey),P(c,px+ex,py+ey),P(c,-px+ex,-py+ey),P(a,-px-ex,-py-ey))}
-  o.push(o[0]);return o}
-function drawBlocks(){blkLayer.clearLayers();st.blocks.forEach(b=>L.polygon(ring(b).map(c=>[c[1],c[0]]),{color:'#e04a4a',weight:2,fillOpacity:.35}).addTo(blkLayer));
-  $('#blkList').innerHTML=st.blocks.length?st.blocks.map((b,i)=>`<div class="blk"><span>${b.type==='spot'?'🚫 Blocked spot':'🚧 Blocked road'} ${i+1}</span><span class="row"><button type="button" data-bs="${i}">Show</button><button type="button" data-bd="${i}" aria-label="Remove">✕</button></span></div>`).join('')+
+const mPer=la=>[110540,111320*Math.cos(la*Math.PI/180)];
+function circle(la,ln,r){const [mLat,mLng]=mPer(la),o=[];for(let i=0;i<12;i++){const a=2*Math.PI*i/12;o.push([+(ln+r*Math.sin(a)/mLng).toFixed(6),+(la+r*Math.cos(a)/mLat).toFixed(6)])}o.push(o[0]);return o}
+const ring=b=>circle(b.pts[0][0],b.pts[0][1],15);
+function drawDraft(){draftLayer.clearLayers();draft.forEach(p=>L.circleMarker(p,{radius:6,color:'#e04a4a',fillOpacity:.9}).addTo(draftLayer));
+  if(draft.length>1)L.polyline(draft,{color:'#e04a4a',dashArray:'6 6',weight:3}).addTo(draftLayer);
+  $('#fshint').textContent=draft.length?`${draft.length} point${draft.length>1?'s':''}. Keep tapping along the road${draft.length>1?', or tap ✓ Finish road':''}.`:HINT.road}
+function drawBlocks(){blkLayer.clearLayers();
+  st.blocks.forEach(b=>{if(b.type==='spot')L.polygon(ring(b).map(c=>[c[1],c[0]]),{color:'#e04a4a',weight:2,fillOpacity:.35}).addTo(blkLayer);
+    else L.polyline(b.line,{color:'#e04a4a',weight:9,opacity:.5,lineCap:'round'}).addTo(blkLayer)});
+  $('#blkList').innerHTML=st.blocks.length?st.blocks.map((b,i)=>`<div class="blk"><span>${b.type==='spot'?'🚫 Spot '+(i+1):'🚧 '+esc(b.name||'Road '+(i+1))}</span><span class="row"><button type="button" data-bs="${i}">Show</button><button type="button" data-bd="${i}" aria-label="Remove">✕</button></span></div>`).join('')+
     (st.blocks.length>1?'<div style="margin-top:6px"><button type="button" data-bc="1">Clear all</button></div>':''):''}
 $('#blkList').onclick=e=>{const s=e.target.closest('[data-bs]'),d=e.target.closest('[data-bd]'),c=e.target.closest('[data-bc]');
-  if(s){const b=st.blocks[+s.dataset.bs];setFs(true);setTimeout(()=>map.setView(b.pts[0],17),120)}
+  if(s){const b=st.blocks[+s.dataset.bs];setFs(true);setTimeout(()=>b.type==='spot'?map.setView(b.pts[0],17):map.fitBounds(L.latLngBounds(b.line),{padding:[40,40]}),120)}
   if(d){st.blocks.splice(+d.dataset.bd,1);LS.set('blocks',st.blocks);drawBlocks()}
   if(c){if(!c.dataset.arm){c.dataset.arm=1;c.textContent='Tap again to clear all';return}st.blocks=[];LS.set('blocks',st.blocks);drawBlocks()}};
 function addBlock(b){st.blocks.push(b);LS.set('blocks',st.blocks);drawBlocks();setMode('start');toast(isFs()?'Blocked. Add more, or tap Done and then Find routes.':'Blocked. Tap Find routes to re-plan around it.')}
+// follow the actual road between the tapped points
+async function snapRoad(pts){try{const j=await orsPost('driving-car',{coordinates:pts.map(p=>[p[1],p[0]]),instructions:false,preference:'shortest'});
+    const c=j.features[0].geometry.coordinates;const step=Math.max(1,Math.floor(c.length/150));const o=[];for(let i=0;i<c.length;i+=step)o.push([+c[i][1].toFixed(6),+c[i][0].toFixed(6)]);
+    const l=c[c.length-1];o.push([+l[1].toFixed(6),+l[0].toFixed(6)]);return o}catch(e){return null}}
+async function finishRoad(){if(draft.length<2){toast('Tap at least the start and end corners');return}
+  if(!st.key){dlg.showModal();return}
+  const pts=draft.slice();$('#fshint').textContent='Following the road…';
+  const line=await snapRoad(pts);if(!line)toast('Could not follow the road, so the block uses your taps as drawn');
+  addBlock({type:'road',line:line||pts})}
 map.on('click',e=>{const ll=[+e.latlng.lat.toFixed(6),+e.latlng.lng.toFixed(6)];
   if(mode==='spot'){addBlock({type:'spot',pts:[ll]});return}
-  if(mode==='stretch'){if(!stretchA){stretchA=ll;tmpPin=L.circleMarker(ll,{radius:7,color:'#e04a4a'}).addTo(map);$('#blkHint').textContent='Now tap the other end of the stretch, further along the same road.';return}
-    if(map.distance(stretchA,ll)>3000){toast('Keep each blocked stretch under 3 km. Add another for the rest.');return}
-    addBlock({type:'stretch',pts:[stretchA,ll]});return}
+  if(mode==='road'){draft.push(ll);drawDraft();return}
   setStart(ll)});
 drawBlocks();
+// ---------- block by name, using OpenStreetMap data ----------
+async function overpass(q){for(const u of ['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter']){
+    try{const r=await fetch(u,{method:'POST',body:'data='+encodeURIComponent(q),headers:{'Content-Type':'application/x-www-form-urlencoded'}});if(r.ok)return await r.json()}catch(e){}}
+  throw new Error('The map data service did not answer. Try again in a minute.')}
+const nameRx=t=>'^'+String(t).trim().replace(/\b(road|rd|street|st|avenue|ave|drive|dr|crescent|cres|lane|ln|way|close|boulevard|blvd|weg|straat|laan|singel)\.?$/i,'').trim().replace(/[^A-Za-z0-9 ]/g,'.');
+async function corner(road,cross){const c0=map.getCenter(),[la,ln]=st.start||[c0.lat,c0.lng];
+  const j=await overpass(`[out:json][timeout:25];way["highway"]["name"~"${nameRx(road)}",i](around:8000,${la},${ln})->.r;way["highway"]["name"~"${nameRx(cross)}",i](around:8000,${la},${ln})->.c;node(w.r)->.rn;node(w.c)->.cn;node.rn.cn;out;`);
+  const n=(j.elements||[]).filter(e=>e.type==='node');if(!n.length)throw new Error(`Couldn't find where ${road} meets ${cross}. Check the spelling.`);
+  n.sort((a,b)=>Math.hypot(a.lat-la,a.lon-ln)-Math.hypot(b.lat-la,b.lon-ln));return [n[0].lat,n[0].lon]}
+$('#bn_go').onclick=async()=>{const r=$('#bn_road').value.trim(),a=$('#bn_a').value.trim(),b=$('#bn_b').value.trim();
+  if(!r||!a||!b){toast('Fill in the road and both corners');return}if(!st.key){dlg.showModal();return}
+  const btn=$('#bn_go');btn.disabled=true;btn.textContent='Finding the corners…';
+  try{const [A,B]=await Promise.all([corner(r,a),corner(r,b)]);btn.textContent='Following the road…';
+    const line=await snapRoad([A,B]);addBlock({type:'road',line:line||[A,B],name:`${r}: ${a} to ${b}`});
+    $('#bn_a').value=$('#bn_b').value='';setFs(true);setTimeout(()=>map.fitBounds(L.latLngBounds(line||[A,B]),{padding:[40,40]}),120)}
+  catch(e){toast(e.message||'Could not block that road')}
+  btn.disabled=false;btn.textContent='Block this stretch'};
+// ---------- schools, parks and estates to keep out of ----------
+$('#areas').checked=LS.get('areas',true);$('#areas').onchange=e=>LS.set('areas',e.target.checked);
+function inPoly(pt,ring){let c=false;for(let i=0,j=ring.length-1;i<ring.length;j=i++){const [xi,yi]=ring[i],[xj,yj]=ring[j];
+  if((yi>pt[1])!==(yj>pt[1])&&pt[0]<(xj-xi)*(pt[1]-yi)/(yj-yi)+xi)c=!c}return c}
+async function avoidAreas(radius,trail){const [la,ln]=st.start,k=`${la.toFixed(3)},${ln.toFixed(3)},${radius},${trail?1:0}`;const c=LS.get('areaCache',null);
+  if(c&&c.k===k&&Date.now()-c.t<7*864e5)return c.polys;
+  const A=`(around:${radius},${la},${ln})`;
+  const j=await overpass(`[out:json][timeout:30];(way["amenity"~"^(school|kindergarten|college|university|hospital|prison)$"]${A};way["leisure"~"^(golf_course${trail?'':'|park'})$"]${A};way["landuse"~"^(military|cemetery)$"]${A};);out geom;node["barrier"~"gate"]${A};out;`);
+  const polys=[],me=[ln,la];
+  for(const e of j.elements||[]){
+    if(e.type==='way'&&e.geometry&&e.geometry.length>3){const g=e.geometry,f=g[0],l=g[g.length-1];if(f.lat!==l.lat||f.lon!==l.lon)continue;
+      const step=Math.max(1,Math.ceil(g.length/40)),r=[];for(let i=0;i<g.length-1;i+=step)r.push([+g[i].lon.toFixed(6),+g[i].lat.toFixed(6)]);r.push(r[0]);
+      if(r.length>=4&&!inPoly(me,r))polys.push(r)}
+    else if(e.type==='node'){if(/^(yes|permissive|public)$/.test((e.tags&&e.tags.access)||''))continue;
+      if(map.distance([e.lat,e.lon],st.start)<250)continue;polys.push(circle(e.lat,e.lon,12))}}
+  LS.set('areaCache',{k,t:Date.now(),polys});return polys}
+function drawAreas(polys){areaLayer.clearLayers();polys.forEach(r=>L.polygon(r.map(c=>[c[1],c[0]]),{color:'#8a63d2',weight:1,fillOpacity:.12,interactive:false}).addTo(areaLayer))}
+// ---------- how much of a route runs along a blocked road ----------
+function alongBlocked(coords){const roads=st.blocks.filter(b=>b.type==='road');if(!roads.length)return 0;
+  const [mLat,mLng]=mPer(st.start[0]),P=(la,ln)=>[ln*mLng,la*mLat];
+  const segs=[];roads.forEach(b=>{for(let i=0;i<b.line.length-1;i++)segs.push([P(...b.line[i]),P(...b.line[i+1])])});
+  const near=p=>segs.some(([a,b])=>{const dx=b[0]-a[0],dy=b[1]-a[1],L2=dx*dx+dy*dy;let t=L2?((p[0]-a[0])*dx+(p[1]-a[1])*dy)/L2:0;t=Math.max(0,Math.min(1,t));
+    return Math.hypot(p[0]-a[0]-t*dx,p[1]-a[1]-t*dy)<20});
+  const pts=coords.map(c=>P(c[1],c[0])),nr=pts.map(near);let tot=0;const d=[];for(let i=0;i<pts.length-1;i++){d.push(Math.hypot(pts[i+1][0]-pts[i][0],pts[i+1][1]-pts[i][1]));tot+=d[i]}
+  let m=0,run=0;for(let i=0;i<d.length;i++){const at=run;run+=d[i];if(at<250||run>tot-250)continue;if(nr[i]&&nr[i+1])m+=d[i]}return Math.round(m)}
 function locate(quiet){if(!navigator.geolocation){if(!quiet)toast('Location not available on this browser');return}
   $('#b_loc').disabled=true;$('#b_loc').textContent='Finding you…';
   navigator.geolocation.getCurrentPosition(p=>{setStart([p.coords.latitude,p.coords.longitude],true);$('#b_loc').disabled=false;$('#b_loc').textContent='📍 Use my location'},
@@ -255,8 +322,15 @@ async function orsRound(seed,len){
   const prof=st.surface==='trail'?'foot-hiking':'foot-walking';
   const body={coordinates:[[st.start[1],st.start[0]]],elevation:true,instructions:false,extra_info:['surface','waytype'],
     options:{round_trip:{length:Math.round(len),points:5,seed}}};
-  if(st.blocks.length)body.options.avoid_polygons={type:'MultiPolygon',coordinates:st.blocks.map(b=>[ring(b)])};
+  const av=st.blocks.filter(b=>b.type==='spot').map(b=>[ring(b)]).concat((st.areaPolys||[]).map(r=>[r]));
+  if(av.length)body.options.avoid_polygons={type:'MultiPolygon',coordinates:av};
   const w=weightings();if(w)body.options.profile_params={weightings:w};
+  const j=await orsPost(prof,body);
+  const f=j.features&&j.features[0];if(!f)throw new Error('No route found from here');
+  const pr=f.properties||{},ex=pr.extras||{};
+  return{seed,coords:f.geometry.coordinates,dist:(pr.summary&&pr.summary.distance)||0,asc:Math.round(pr.ascent||0),desc:Math.round(pr.descent||0),
+    unpaved:share(ex.surface,{2:1,8:1,9:1,10:1,11:1,12:1,13:1,15:1,16:1,17:1,18:1}),main:share(ex.waytype,{1:1,2:.5})}}
+async function orsPost(prof,body){
   const opts={method:'POST',headers:{'Authorization':st.key,'Content-Type':'application/json','Accept':'application/geo+json, application/json'},body:JSON.stringify(body)};
   let r;
   try{r=await fetch(`https://api.heigit.org/openrouteservice/v2/directions/${prof}/geojson`,opts)}
@@ -264,10 +338,7 @@ async function orsRound(seed,len){
     r=await fetch(`https://api.openrouteservice.org/v2/directions/${prof}/geojson`,opts)}
   const j=await r.json().catch(()=>({}));
   if(!r.ok){const m=(j.error&&(j.error.message||j.error))||j.message||('error '+r.status);const e=new Error(String(m));e.status=r.status;throw e}
-  const f=j.features&&j.features[0];if(!f)throw new Error('No route found from here');
-  const pr=f.properties||{},ex=pr.extras||{};
-  return{seed,coords:f.geometry.coordinates,dist:(pr.summary&&pr.summary.distance)||0,asc:Math.round(pr.ascent||0),desc:Math.round(pr.descent||0),
-    unpaved:share(ex.surface,{2:1,8:1,9:1,10:1,11:1,12:1,13:1,15:1,16:1,17:1,18:1}),main:share(ex.waytype,{1:1,2:.5})}}
+  return j}
 // share of the route on the given values (ORS extra_info codes), weighted
 function share(x,w){const s=x&&x.summary;if(!s||!s.length)return 0;let t=0,h=0;for(const v of s){const d=v.distance||v.amount||0;t+=d;h+=d*(w[v.value]||0)}return t?h/t:0}
 // retry with the other weighting format, then without, if the API rejects them
@@ -278,7 +349,7 @@ async function orsSafe(seed,len){
 // the service treats length as a rough target, so re-ask up to twice with a scaled length
 async function getRoute(seed,target){
   let len=target,last=await orsSafe(seed,len),best=last;
-  for(let i=0;i<2;i++){const ratio=best.dist/target;if(!best.dist||(ratio>0.94&&ratio<1.06))break;
+  for(let i=0;i<1;i++){const ratio=best.dist/target;if(!best.dist||(ratio>0.94&&ratio<1.06))break;
     len=len*target/last.dist;try{last=await orsSafe(seed,len);if(Math.abs(last.dist-target)<Math.abs(best.dist-target))best=last}catch(e){break}}
   return best}
 
@@ -296,10 +367,21 @@ $('#b_go').onclick=async()=>{
   const km=parseFloat($('#km').value);if(!(km>=1&&km<=60)){toast('Enter a distance between 1 and 60 km');return}
   LS.set('km',km);const target=km*1000;
   const b=$('#b_go');b.disabled=true;b.textContent='Finding routes…';
-  const used=new Set(LS.get('seeds',[]));const n=6;const seeds=[];
-  while(seeds.length<n){const s=Math.floor(Math.random()*90000)+1;if(!used.has(s)&&!seeds.includes(s))seeds.push(s)}
-  const res=await Promise.allSettled(seeds.map(s=>getRoute(s,target)));
+  st.areaPolys=[];areaLayer.clearLayers();let note='';
+  if($('#areas').checked){b.textContent='Checking schools, parks & estates…';
+    try{st.areaPolys=await avoidAreas(Math.round(Math.min(4000,Math.max(1500,target*0.4))),st.surface==='trail');drawAreas(st.areaPolys)}
+    catch(e){note='Could not load schools, parks and estates to avoid, so this plan may go through some.'}}
+  b.textContent='Finding routes…';
+  const used=new Set(LS.get('seeds',[]));const tried=new Set();
+  const seedsN=n=>{const o=[];while(o.length<n){const s=Math.floor(Math.random()*90000)+1;if(!used.has(s)&&!tried.has(s)){tried.add(s);o.push(s)}}return o};
+  let res=await Promise.allSettled(seedsN(6).map(s=>getRoute(s,target)));
   let ok=res.filter(r=>r.status==='fulfilled').map(r=>r.value);
+  if(!ok.length&&st.areaPolys.length){// the avoided areas may box the start in: try once without them
+    st.areaPolys=[];areaLayer.clearLayers();note='Avoiding schools, parks and estates left no route from here, so this plan ignores them.';
+    res=await Promise.allSettled(seedsN(4).map(s=>getRoute(s,target)));ok=res.filter(r=>r.status==='fulfilled').map(r=>r.value)}
+  ok.forEach(r=>r.along=alongBlocked(r.coords));
+  if(ok.filter(r=>r.along<150).length<3&&!res.some(r=>r.status==='rejected'&&r.reason&&r.reason.status===429)){b.textContent='Looking for routes off your blocked roads…';
+    const more=await Promise.allSettled(seedsN(6).map(s=>getRoute(s,target)));more.forEach(r=>{if(r.status==='fulfilled'){r.value.along=alongBlocked(r.value.coords);ok.push(r.value)}})}
   b.disabled=false;b.textContent='Shuffle: 3 new routes';
   if(!ok.length){const e=res[0].reason||{};let m=e.message||'Something went wrong';
     if(e.status===401||e.status===403)m='Your OpenRouteService key was rejected. Check it in ⚙︎ Settings.';
@@ -316,10 +398,12 @@ $('#b_go').onclick=async()=>{
     if(st.quiet)s+=r.main*3;                                           // 20% on main roads = 0.6
     if(st.surface==='paved')s+=r.unpaved*5;else if(st.surface==='trail')s+=(1-r.unpaved)*1.5;
     if(st.hills==='flat')s+=per(r)/30;else if(st.hills==='hilly')s-=per(r)/30;
-    if(r.sim>0.6)s+=1.5;return s};
+    if(r.sim>0.6)s+=1.5;s+=(r.along||0)/100;return s};
+  {const p=ok.filter(r=>(r.along||0)<150);if(p.length)ok=p}
   if(st.surface==='paved'){const p=ok.filter(r=>r.unpaved<0.1);if(p.length)ok=p}
   ok.sort((a,b)=>score(a)-score(b));
   st.routes=ok.slice(0,3);st.sel=0;draw();
+  if(note)$('#err').innerHTML=`<div class="err">${esc(note)}</div>`;
   map.fitBounds(L.latLngBounds(st.routes.flatMap(r=>r.coords.map(c=>[c[1],c[0]]))),{padding:[24,24]});
 };
 
@@ -337,7 +421,7 @@ function draw(){
   $('#opts').innerHTML=st.routes.map((r,i)=>{const sel=i===st.sel;
     return `<div><button type="button" class="opt" style="--c:${COLORS[i]}" data-i="${i}" aria-pressed="${sel}">
       <b>${LETTERS[i]} · ${(r.dist/1000).toFixed(1)} km</b><span class="tag">↑ ${r.asc} m</span>${r.sim>0.6?'<span class="tag warn">Similar to a recent run</span>':''}
-      <div style="margin-top:4px">${(()=>{const t=parseFloat($('#km').value)*1000,d=r.dist-t;return Math.abs(d)>t*0.06?`<span class="tag warn" style="margin-left:0">${d>0?'+':''}${(d/1000).toFixed(1)} km vs plan</span>`:''})()}<span class="tag${(r.main||0)>0.15?' warn':''}" style="margin-left:${0}">Main roads ${Math.round((r.main||0)*100)}%</span><span class="tag${st.surface==='paved'&&r.unpaved>0.05?' warn':''}">Unpaved ${Math.round((r.unpaved||0)*100)}%</span></div>
+      <div style="margin-top:4px">${(()=>{const t=parseFloat($('#km').value)*1000,d=r.dist-t;return Math.abs(d)>t*0.06?`<span class="tag warn" style="margin-left:0">${d>0?'+':''}${(d/1000).toFixed(1)} km vs plan</span>`:''})()}<span class="tag${(r.main||0)>0.15?' warn':''}" style="margin-left:${0}">Main roads ${Math.round((r.main||0)*100)}%</span><span class="tag${st.surface==='paved'&&r.unpaved>0.05?' warn':''}">Unpaved ${Math.round((r.unpaved||0)*100)}%</span>${r.along>=150?`<span class="tag warn">${r.along} m on a blocked road</span>`:''}</div>
       ${sel?elevSvg(r.coords,COLORS[i]):'<div class="k">Tap to select</div>'}</button>
       ${sel?`<div class="acts"><button type="button" class="pri full" data-a="send">Send to watch (GPX)</button>
         <button type="button" data-a="run">✓ Mark as run</button><button type="button" data-a="dl">Download GPX</button></div>`:''}</div>`}).join('')+
