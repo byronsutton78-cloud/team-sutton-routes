@@ -45,6 +45,8 @@ dialog{background:var(--card);color:var(--ink);border:1px solid var(--line);bord
 dialog::backdrop{background:#000a}
 a{color:#7fb2ff}
 .leaflet-container{background:#1b2127}
+.blk{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line);font-size:14px}
+.seg button.on{background:#3a1515;border-color:#e04a4a;color:#fff}
 .err{background:#3a1515;border:1px solid #6b2a2a;color:#ffd0d0;border-radius:12px;padding:10px 12px;margin-top:10px;font-size:14px}
 </style>
 </head>
@@ -68,7 +70,8 @@ a{color:#7fb2ff}
 
   <label class="t">Surface</label>
   <div class="seg" id="surface">
-    <button type="button" data-v="road">Road &amp; paths</button>
+    <button type="button" data-v="paved">Paved only</button>
+    <button type="button" data-v="mixed">Mixed</button>
     <button type="button" data-v="trail">Trail</button>
   </div>
 
@@ -79,8 +82,16 @@ a{color:#7fb2ff}
     <button type="button" data-v="hilly">Hillier</button>
   </div>
 
-  <label class="sw"><span>Quiet streets<br><span class="k">Steers away from busy main roads</span></span><input type="checkbox" id="quiet"></label>
+  <label class="sw"><span>Avoid main roads<br><span class="k">Picks routes that stay on side streets and paths</span></span><input type="checkbox" id="quiet"></label>
   <label class="sw"><span>Prefer green areas<br><span class="k">Parks, reserves and greenbelts where possible</span></span><input type="checkbox" id="green"></label>
+
+  <label class="t">Roads &amp; places to avoid</label>
+  <div class="seg" id="blk">
+    <button type="button" data-m="spot">🚫 Block a spot</button>
+    <button type="button" data-m="stretch">🚧 Block a road</button>
+  </div>
+  <div class="k" id="blkHint" style="margin-top:6px">Block a fuel station or a busy stretch of road and routes will go around it. Blocking a road also stops routes crossing it along that stretch.</div>
+  <div id="blkList"></div>
 
   <div style="margin-top:14px"><button type="button" class="pri" id="b_go">Find 3 routes</button></div>
   <div id="err"></div>
@@ -127,7 +138,7 @@ const P=new URLSearchParams(location.search);
 const st={
   key:LS.get('key',''),
   start:LS.get('start',null),
-  surface:LS.get('surface','road'),
+  surface:(s=>s==='road'?'paved':s)(LS.get('surface','paved')),blocks:LS.get('blocks',[]),
   hills:'any',
   quiet:LS.get('quiet',true),
   green:LS.get('green',false),
@@ -160,7 +171,33 @@ function setStart(ll,fly){st.start=[+ll[0].toFixed(6),+ll[1].toFixed(6)];LS.set(
   $('#startTxt').textContent=`Start set (${st.start[0].toFixed(4)}, ${st.start[1].toFixed(4)}). Drag the pin or tap the map to move it.`;
   if(fly)map.setView(st.start,15)}
 if(st.start)setStart(st.start);
-map.on('click',e=>setStart([e.latlng.lat,e.latlng.lng]));
+let mode='start',stretchA=null,tmpPin=null;const blkLayer=L.layerGroup().addTo(map);
+const DEF_HINT=$('#blkHint').textContent;
+function setMode(m){mode=m;stretchA=null;if(tmpPin){map.removeLayer(tmpPin);tmpPin=null}
+  document.querySelectorAll('#blk button').forEach(b=>b.classList.toggle('on',b.dataset.m===m));
+  $('#blkHint').textContent=m==='spot'?'Tap the map on the spot to block (for example the fuel station).':m==='stretch'?'Tap one end of the road stretch to block.':DEF_HINT;
+  if(m!=='start')document.getElementById('map').scrollIntoView({behavior:'smooth',block:'start'})}
+$('#blk').onclick=e=>{const b=e.target.closest('button');if(!b)return;setMode(mode===b.dataset.m?'start':b.dataset.m)};
+function ring(b){const la=b.pts[0][0],mLat=110540,mLng=111320*Math.cos(la*Math.PI/180),o=[];
+  if(b.type==='spot'){const [y,x]=b.pts[0],r=40;for(let i=0;i<12;i++){const a=2*Math.PI*i/12;o.push([x+r*Math.sin(a)/mLng,y+r*Math.cos(a)/mLat])}}
+  else{const [a,c]=b.pts,dx=(c[1]-a[1])*mLng,dy=(c[0]-a[0])*mLat,Ln=Math.hypot(dx,dy)||1,w=14,px=-dy/Ln*w,py=dx/Ln*w,ex=dx/Ln*10,ey=dy/Ln*10;
+    const P=(p,ox,oy)=>[p[1]+ox/mLng,p[0]+oy/mLat];o.push(P(a,px-ex,py-ey),P(c,px+ex,py+ey),P(c,-px+ex,-py+ey),P(a,-px-ex,-py-ey))}
+  o.push(o[0]);return o}
+function drawBlocks(){blkLayer.clearLayers();st.blocks.forEach(b=>L.polygon(ring(b).map(c=>[c[1],c[0]]),{color:'#e04a4a',weight:2,fillOpacity:.35}).addTo(blkLayer));
+  $('#blkList').innerHTML=st.blocks.length?st.blocks.map((b,i)=>`<div class="blk"><span>${b.type==='spot'?'🚫 Blocked spot':'🚧 Blocked road'} ${i+1}</span><span class="row"><button type="button" data-bs="${i}">Show</button><button type="button" data-bd="${i}" aria-label="Remove">✕</button></span></div>`).join('')+
+    (st.blocks.length>1?'<div style="margin-top:6px"><button type="button" data-bc="1">Clear all</button></div>':''):''}
+$('#blkList').onclick=e=>{const s=e.target.closest('[data-bs]'),d=e.target.closest('[data-bd]'),c=e.target.closest('[data-bc]');
+  if(s){const b=st.blocks[+s.dataset.bs];map.setView(b.pts[0],17);document.getElementById('map').scrollIntoView({behavior:'smooth'})}
+  if(d){st.blocks.splice(+d.dataset.bd,1);LS.set('blocks',st.blocks);drawBlocks()}
+  if(c){if(!c.dataset.arm){c.dataset.arm=1;c.textContent='Tap again to clear all';return}st.blocks=[];LS.set('blocks',st.blocks);drawBlocks()}};
+function addBlock(b){st.blocks.push(b);LS.set('blocks',st.blocks);drawBlocks();setMode('start');toast('Blocked. Tap Find routes to re-plan around it.')}
+map.on('click',e=>{const ll=[+e.latlng.lat.toFixed(6),+e.latlng.lng.toFixed(6)];
+  if(mode==='spot'){addBlock({type:'spot',pts:[ll]});return}
+  if(mode==='stretch'){if(!stretchA){stretchA=ll;tmpPin=L.circleMarker(ll,{radius:7,color:'#e04a4a'}).addTo(map);$('#blkHint').textContent='Now tap the other end of the stretch, further along the same road.';return}
+    if(map.distance(stretchA,ll)>3000){toast('Keep each blocked stretch under 3 km. Add another for the rest.');return}
+    addBlock({type:'stretch',pts:[stretchA,ll]});return}
+  setStart(ll)});
+drawBlocks();
 function locate(quiet){if(!navigator.geolocation){if(!quiet)toast('Location not available on this browser');return}
   $('#b_loc').disabled=true;$('#b_loc').textContent='Finding you…';
   navigator.geolocation.getCurrentPosition(p=>{setStart([p.coords.latitude,p.coords.longitude],true);$('#b_loc').disabled=false;$('#b_loc').textContent='📍 Use my location'},
@@ -181,8 +218,9 @@ function weightings(){const on=[];if(st.quiet)on.push('quiet');if(st.green)on.pu
   const w={};on.forEach(k=>w[k]=st.wmode==='obj'?{factor:1}:1);return w}
 async function orsRound(seed,len){
   const prof=st.surface==='trail'?'foot-hiking':'foot-walking';
-  const body={coordinates:[[st.start[1],st.start[0]]],elevation:true,instructions:false,
+  const body={coordinates:[[st.start[1],st.start[0]]],elevation:true,instructions:false,extra_info:['surface','waytype'],
     options:{round_trip:{length:Math.round(len),points:5,seed}}};
+  if(st.blocks.length)body.options.avoid_polygons={type:'MultiPolygon',coordinates:st.blocks.map(b=>[ring(b)])};
   const w=weightings();if(w)body.options.profile_params={weightings:w};
   const opts={method:'POST',headers:{'Authorization':st.key,'Content-Type':'application/json','Accept':'application/geo+json, application/json'},body:JSON.stringify(body)};
   let r;
@@ -192,16 +230,22 @@ async function orsRound(seed,len){
   const j=await r.json().catch(()=>({}));
   if(!r.ok){const m=(j.error&&(j.error.message||j.error))||j.message||('error '+r.status);const e=new Error(String(m));e.status=r.status;throw e}
   const f=j.features&&j.features[0];if(!f)throw new Error('No route found from here');
-  const pr=f.properties||{};return{seed,coords:f.geometry.coordinates,dist:(pr.summary&&pr.summary.distance)||0,asc:Math.round(pr.ascent||0),desc:Math.round(pr.descent||0)}}
+  const pr=f.properties||{},ex=pr.extras||{};
+  return{seed,coords:f.geometry.coordinates,dist:(pr.summary&&pr.summary.distance)||0,asc:Math.round(pr.ascent||0),desc:Math.round(pr.descent||0),
+    unpaved:share(ex.surface,{2:1,8:1,9:1,10:1,11:1,12:1,13:1,15:1,16:1,17:1,18:1}),main:share(ex.waytype,{1:1,2:.5})}}
+// share of the route on the given values (ORS extra_info codes), weighted
+function share(x,w){const s=x&&x.summary;if(!s||!s.length)return 0;let t=0,h=0;for(const v of s){const d=v.distance||v.amount||0;t+=d;h+=d*(w[v.value]||0)}return t?h/t:0}
 // retry with the other weighting format, then without, if the API rejects them
 async function orsSafe(seed,len){
   for(let i=0;i<3;i++){try{return await orsRound(seed,len)}catch(e){
     if(e.status===400&&weightings()&&/weight|profile_param|green|quiet/i.test(e.message)){st.wmode=st.wmode==='int'?'obj':'none';LS.set('wmode',st.wmode);continue}throw e}}
   return orsRound(seed,len)}
+// the service treats length as a rough target, so re-ask up to twice with a scaled length
 async function getRoute(seed,target){
-  let r=await orsSafe(seed,target);const ratio=r.dist/target;
-  if(r.dist&&(ratio<0.9||ratio>1.1)){try{const r2=await orsSafe(seed,target*target/r.dist);if(Math.abs(r2.dist-target)<Math.abs(r.dist-target))r=r2}catch(e){}}
-  return r}
+  let len=target,last=await orsSafe(seed,len),best=last;
+  for(let i=0;i<2;i++){const ratio=best.dist/target;if(!best.dist||(ratio>0.94&&ratio<1.06))break;
+    len=len*target/last.dist;try{last=await orsSafe(seed,len);if(Math.abs(last.dist-target)<Math.abs(best.dist-target))best=last}catch(e){break}}
+  return best}
 
 /* ---------- similarity to recent runs ---------- */
 const cell=(lat,lng)=>Math.round(lat/0.0003)+':'+Math.round(lng/0.00036);
@@ -217,13 +261,14 @@ $('#b_go').onclick=async()=>{
   const km=parseFloat($('#km').value);if(!(km>=1&&km<=60)){toast('Enter a distance between 1 and 60 km');return}
   LS.set('km',km);const target=km*1000;
   const b=$('#b_go');b.disabled=true;b.textContent='Finding routes…';
-  const used=new Set(LS.get('seeds',[]));const n=st.hills==='any'?3:5;const seeds=[];
+  const used=new Set(LS.get('seeds',[]));const n=6;const seeds=[];
   while(seeds.length<n){const s=Math.floor(Math.random()*90000)+1;if(!used.has(s)&&!seeds.includes(s))seeds.push(s)}
   const res=await Promise.allSettled(seeds.map(s=>getRoute(s,target)));
   let ok=res.filter(r=>r.status==='fulfilled').map(r=>r.value);
   b.disabled=false;b.textContent='Shuffle: 3 new routes';
   if(!ok.length){const e=res[0].reason||{};let m=e.message||'Something went wrong';
     if(e.status===401||e.status===403)m='Your OpenRouteService key was rejected. Check it in ⚙︎ Settings.';
+    else if(/routable point|radius/i.test(m))m='No path found from the start point. Move the pin onto a street, or make sure it isn\'t inside a blocked area.';
     else if(e.status===429)m='Daily or per-minute limit reached on your free key. Try again in a minute.';
     else if(/fetch|network|load failed/i.test(m))m='The route service did not answer. Check your signal. If your signal is fine, your key may be wrong: check it in ⚙︎ Settings (no spaces before or after).';
     $('#err').innerHTML=`<div class="err">${esc(m)}</div>`;return}
@@ -232,7 +277,13 @@ $('#b_go').onclick=async()=>{
   // drop near-duplicates of each other
   const uniq=[];for(const r of ok){const cs=cellsOf(r.coords);if(!uniq.some(u=>overlap(u.coords,cs)>0.8))uniq.push(r)}ok=uniq;
   const per=r=>r.asc/Math.max(1,r.dist/1000);
-  ok.sort((a,b)=>((a.sim>0.6)-(b.sim>0.6))||(st.hills==='hilly'?per(b)-per(a):st.hills==='flat'?per(a)-per(b):0));
+  const score=r=>{let s=Math.abs(r.dist-target)/target*4;          // 10% off target = 0.4
+    if(st.quiet)s+=r.main*3;                                           // 20% on main roads = 0.6
+    if(st.surface==='paved')s+=r.unpaved*5;else if(st.surface==='trail')s+=(1-r.unpaved)*1.5;
+    if(st.hills==='flat')s+=per(r)/30;else if(st.hills==='hilly')s-=per(r)/30;
+    if(r.sim>0.6)s+=1.5;return s};
+  if(st.surface==='paved'){const p=ok.filter(r=>r.unpaved<0.1);if(p.length)ok=p}
+  ok.sort((a,b)=>score(a)-score(b));
   st.routes=ok.slice(0,3);st.sel=0;draw();
   map.fitBounds(L.latLngBounds(st.routes.flatMap(r=>r.coords.map(c=>[c[1],c[0]]))),{padding:[24,24]});
 };
@@ -251,6 +302,7 @@ function draw(){
   $('#opts').innerHTML=st.routes.map((r,i)=>{const sel=i===st.sel;
     return `<div><button type="button" class="opt" style="--c:${COLORS[i]}" data-i="${i}" aria-pressed="${sel}">
       <b>${LETTERS[i]} · ${(r.dist/1000).toFixed(1)} km</b><span class="tag">↑ ${r.asc} m</span>${r.sim>0.6?'<span class="tag warn">Similar to a recent run</span>':''}
+      <div style="margin-top:4px">${(()=>{const t=parseFloat($('#km').value)*1000,d=r.dist-t;return Math.abs(d)>t*0.06?`<span class="tag warn" style="margin-left:0">${d>0?'+':''}${(d/1000).toFixed(1)} km vs plan</span>`:''})()}<span class="tag${(r.main||0)>0.15?' warn':''}" style="margin-left:${0}">Main roads ${Math.round((r.main||0)*100)}%</span><span class="tag${st.surface==='paved'&&r.unpaved>0.05?' warn':''}">Unpaved ${Math.round((r.unpaved||0)*100)}%</span></div>
       ${sel?elevSvg(r.coords,COLORS[i]):'<div class="k">Tap to select</div>'}</button>
       ${sel?`<div class="acts"><button type="button" class="pri full" data-a="send">Send to watch (GPX)</button>
         <button type="button" data-a="run">✓ Mark as run</button><button type="button" data-a="dl">Download GPX</button></div>`:''}</div>`}).join('')+
