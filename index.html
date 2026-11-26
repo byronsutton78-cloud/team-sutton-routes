@@ -26,6 +26,9 @@ button:disabled{opacity:.5}
 #fsbar button.on{background:#7a1f1f;border-color:#e04a4a}
 #fsbar button.done{background:var(--acc);border-color:var(--acc);font-weight:700}
 #fshint{top:calc(10px + env(safe-area-inset-top));background:#000d;color:#fff;border-radius:12px;padding:8px 12px;font-size:14px;text-align:center;margin-right:110px}
+#xhair{display:none;position:fixed;left:50%;top:50%;width:34px;height:34px;margin:-17px 0 0 -17px;z-index:1550;pointer-events:none;
+  background:linear-gradient(#ff5a36,#ff5a36) center/2px 100% no-repeat,linear-gradient(#ff5a36,#ff5a36) center/100% 2px no-repeat;border-radius:50%;box-shadow:0 0 0 2px #fff8 inset}
+body.fsm.drawing #xhair{display:block}
 body.fsm #fsbar{display:flex}body.fsm #fshint{display:block}
 @media (min-width:900px){
   .lay{display:grid;grid-template-columns:1fr 440px;height:calc(100vh - 64px)}
@@ -72,11 +75,14 @@ a{color:#7fb2ff}
 <div class="lay">
 <div id="map" role="application" aria-label="Map. Tap to set the start point."></div>
 <div id="fshint" role="status"></div>
+<div id="xhair" aria-hidden="true"></div>
 <div id="fsbar">
   <button type="button" data-m="spot">🚫 Block spot</button>
   <button type="button" data-m="road">🚧 Draw road</button>
   <button type="button" id="fs_undo" hidden>↶ Undo</button>
-  <button type="button" id="fs_fin" class="done" hidden>✓ Finish road</button>
+  <button type="button" id="fs_place" hidden>＋ Place point</button>
+  <button type="button" id="fs_loop" hidden>⟲ Back to start</button>
+  <button type="button" id="fs_fin" class="done" hidden>✓ Finish</button>
   <button type="button" class="done" id="fs_done">Done</button>
 </div>
 <main>
@@ -124,6 +130,7 @@ a{color:#7fb2ff}
   <label class="sw"><span>Avoid schools, parks &amp; estates<br><span class="k">Keeps routes out of school grounds, parks, golf courses and gated estates</span></span><input type="checkbox" id="areas"></label>
 
   <div style="margin-top:14px"><button type="button" class="pri" id="b_go">Find 3 routes</button></div>
+  <div style="margin-top:8px"><button type="button" id="b_draw" style="width:100%">✏️ Draw my own route</button></div>
   <div id="err"></div>
   <div id="opts"></div>
 
@@ -194,7 +201,12 @@ $('#green').onchange=e=>{st.green=e.target.checked;LS.set('green',st.green)};
 /* ---------- map ---------- */
 const map=L.map('map',{zoomControl:false}).setView(st.start||[-33.873,18.696],st.start?15:13);
 L.control.zoom({position:'bottomright'}).addTo(map);
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
+const streetL=L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'});
+const satL=L.layerGroup([L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,maxNativeZoom:19,attribution:'Imagery © Esri'}),
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,opacity:.9})]);
+let sat=LS.get('sat',false);(sat?satL:streetL).addTo(map);
+const SatC=L.Control.extend({options:{position:'topright'},onAdd(){const b=L.DomUtil.create('button','fsbtn');b.type='button';b.style.marginTop='6px';b.textContent=sat?'🗺 Map':'🛰 Satellite';
+  L.DomEvent.disableClickPropagation(b);b.onclick=()=>{sat=!sat;LS.set('sat',sat);if(sat){map.removeLayer(streetL);satL.addTo(map)}else{map.removeLayer(satL);streetL.addTo(map)}b.textContent=sat?'🗺 Map':'🛰 Satellite'};return b}});
 let pin=null,lines=[];
 function setStart(ll,fly){st.start=[+ll[0].toFixed(6),+ll[1].toFixed(6)];LS.set('start',st.start);
   if(!pin){pin=L.marker(st.start,{draggable:true,title:'Start'}).addTo(map);pin.on('dragend',()=>{const p=pin.getLatLng();setStart([p.lat,p.lng])})}
@@ -202,15 +214,18 @@ function setStart(ll,fly){st.start=[+ll[0].toFixed(6),+ll[1].toFixed(6)];LS.set(
   $('#startTxt').textContent=`Start set (${st.start[0].toFixed(4)}, ${st.start[1].toFixed(4)}). Drag the pin or tap the map to move it.`;
   if(fly)map.setView(st.start,15)}
 if(st.start)setStart(st.start);
-let mode='start',draft=[];const blkLayer=L.layerGroup().addTo(map),draftLayer=L.layerGroup().addTo(map),areaLayer=L.layerGroup().addTo(map);
+let mode='start',draft={pts:[],segs:[],dist:[],asc:[]};const blkLayer=L.layerGroup().addTo(map),draftLayer=L.layerGroup().addTo(map),areaLayer=L.layerGroup().addTo(map);
 const DEF_HINT=$('#blkHint').textContent,FS_HINT='Pinch to zoom. Tap a route to select it, or block a spot or draw a road below.';
 // older straight-line blocks become road lines
 st.blocks=st.blocks.map(b=>b.type==='stretch'?{type:'road',line:b.pts}:b);
-const HINT={spot:'Tap the spot to block, for example the fuel station.',road:'Tap the start corner, then a few points along the road, then the end corner. Then tap ✓ Finish road.'};
-function setMode(m){mode=m;draft=[];draftLayer.clearLayers();
-  document.querySelectorAll('#blk button,#fsbar [data-m]').forEach(b=>b.classList.toggle('on',b.dataset.m===m));
-  $('#fs_undo').hidden=$('#fs_fin').hidden=m!=='road';$('#fs_done').hidden=m==='road';
-  $('#blkHint').textContent=HINT[m]||DEF_HINT;$('#fshint').textContent=HINT[m]||FS_HINT;
+const HINT={route:'Tap the map, or line the cross up and tap ＋ Place point. Each point follows the streets from the last one.',spot:'Tap the spot to block, for example the fuel station.',road:'Tap the start corner, then a few points along the road, then the end corner. Then tap ✓ Finish road.'};
+function setMode(m){mode=m;draft={pts:[],segs:[],dist:[],asc:[]};draftLayer.clearLayers();const dr=m==='road'||m==='route';
+  document.body.classList.toggle('drawing',dr);
+  document.querySelectorAll('#blk button,#fsbar [data-m]').forEach(b=>{b.classList.toggle('on',b.dataset.m===m);b.hidden=dr});
+  $('#fs_undo').hidden=$('#fs_place').hidden=$('#fs_fin').hidden=!dr;$('#fs_loop').hidden=m!=='route';$('#fs_done').hidden=dr;
+  $('#fs_fin').textContent=m==='road'?'✓ Block road':'✓ Use route';
+  $('#blkHint').textContent=m==='route'?DEF_HINT:(HINT[m]||DEF_HINT);$('#fshint').textContent=HINT[m]||FS_HINT;
+  if(m==='route'&&st.start)addPoint(st.start);
   if(m!=='start'&&!isFs())setFs(true)}
 const isFs=()=>document.body.classList.contains('fsm');
 function setFs(on){document.body.classList.toggle('fsm',on);$('#map').classList.toggle('fs',on);
@@ -220,20 +235,37 @@ function setFs(on){document.body.classList.toggle('fsm',on);$('#map').classList.
 let fsCtl=null;
 const FsC=L.Control.extend({options:{position:'topright'},onAdd(){const b=L.DomUtil.create('button','fsbtn');b.type='button';b.textContent='⤢ Full screen';
   L.DomEvent.disableClickPropagation(b);b.onclick=()=>setFs(!isFs());fsCtl=b;return b}});
-map.addControl(new FsC());
+map.addControl(new FsC());map.addControl(new SatC());
 $('#fsbar').onclick=e=>{const b=e.target.closest('button');if(!b)return;
   if(b.id==='fs_done'){setFs(false);return}
-  if(b.id==='fs_undo'){draft.pop();drawDraft();return}
-  if(b.id==='fs_fin'){finishRoad();return}
+  if(b.id==='fs_undo'){if(busy)return;draft.pts.pop();draft.segs.pop();draft.dist.pop();draft.asc.pop();drawDraft();return}
+  if(b.id==='fs_place'){const c=map.getCenter();addPoint([+c.lat.toFixed(6),+c.lng.toFixed(6)]);return}
+  if(b.id==='fs_loop'){if(draft.pts.length<2){toast('Add a few points first');return}addPoint(draft.pts[0]);return}
+  if(b.id==='fs_fin'){mode==='road'?finishRoad():finishRoute();return}
   setMode(mode===b.dataset.m?'start':b.dataset.m)};
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&isFs())setFs(false)});
+$('#b_draw').onclick=()=>{if(!st.key){dlg.showModal();return}setMode('route')};
 $('#blk').onclick=e=>{const b=e.target.closest('button');if(!b)return;setMode(mode===b.dataset.m?'start':b.dataset.m)};
 const mPer=la=>[110540,111320*Math.cos(la*Math.PI/180)];
 function circle(la,ln,r){const [mLat,mLng]=mPer(la),o=[];for(let i=0;i<12;i++){const a=2*Math.PI*i/12;o.push([+(ln+r*Math.sin(a)/mLng).toFixed(6),+(la+r*Math.cos(a)/mLat).toFixed(6)])}o.push(o[0]);return o}
 const ring=b=>circle(b.pts[0][0],b.pts[0][1],15);
-function drawDraft(){draftLayer.clearLayers();draft.forEach(p=>L.circleMarker(p,{radius:6,color:'#e04a4a',fillOpacity:.9}).addTo(draftLayer));
-  if(draft.length>1)L.polyline(draft,{color:'#e04a4a',dashArray:'6 6',weight:3}).addTo(draftLayer);
-  $('#fshint').textContent=draft.length?`${draft.length} point${draft.length>1?'s':''}. Keep tapping along the road${draft.length>1?', or tap ✓ Finish road':''}.`:HINT.road}
+const fmtKm=m=>m<1000?Math.round(m)+' m':(m/1000).toFixed(2)+' km';
+function draftLine(){const o=[];draft.segs.forEach((g,i)=>g.forEach((c,j)=>{if(i&&!j)return;o.push(c)}));return o}
+function drawDraft(){draftLayer.clearLayers();const col=mode==='road'?'#e04a4a':'#ff5a36';
+  const line=draftLine();if(line.length>1)L.polyline(line.map(c=>[c[1],c[0]]),{color:col,weight:mode==='road'?8:5,opacity:.85}).addTo(draftLayer);
+  draft.pts.forEach((p,i)=>L.circleMarker(p,{radius:i?5:7,color:'#fff',weight:2,fillColor:i?'#111':'#19b37a',fillOpacity:1}).addTo(draftLayer));
+  const d=draft.dist.reduce((a,b)=>a+b,0),up=draft.asc.reduce((a,b)=>a+b,0);
+  $('#fshint').textContent=draft.pts.length<2?(HINT[mode]||FS_HINT):`${fmtKm(d)}${mode==='route'?` · ↑ ${Math.round(up)} m`:''} · ${draft.pts.length} points. Keep adding, or tap ${mode==='road'?'✓ Block road':'✓ Use route'}.`}
+let busy=false;
+// add a point and follow the streets to it from the previous one
+async function addPoint(ll){if(busy)return;const prev=draft.pts[draft.pts.length-1];draft.pts.push(ll);
+  if(!prev){draft.segs.push([[ll[1],ll[0]]]);draft.dist.push(0);draft.asc.push(0);drawDraft();return}
+  busy=true;$('#fshint').textContent='Following the streets…';let seg=null,dist=0,asc=0;
+  try{const j=await orsPost(mode==='road'?'driving-car':(st.surface==='trail'?'foot-hiking':'foot-walking'),
+      {coordinates:[[prev[1],prev[0]],[ll[1],ll[0]]],instructions:false,elevation:mode==='route',preference:mode==='road'?'shortest':'recommended'});
+    const f=j.features[0];seg=f.geometry.coordinates;dist=(f.properties.summary||{}).distance||0;asc=f.properties.ascent||0}
+  catch(e){seg=[[prev[1],prev[0]],[ll[1],ll[0]]];dist=map.distance(prev,ll);toast(e.status===429?'Slow down a little: the free key allows about 40 points a minute':'Could not follow the streets here, so this bit is a straight line')}
+  draft.segs.push(seg);draft.dist.push(dist);draft.asc.push(asc);busy=false;drawDraft()}
 function drawBlocks(){blkLayer.clearLayers();
   st.blocks.forEach(b=>{if(b.type==='spot')L.polygon(ring(b).map(c=>[c[1],c[0]]),{color:'#e04a4a',weight:2,fillOpacity:.35}).addTo(blkLayer);
     else L.polyline(b.line,{color:'#e04a4a',weight:9,opacity:.5,lineCap:'round'}).addTo(blkLayer)});
@@ -248,14 +280,16 @@ function addBlock(b){st.blocks.push(b);LS.set('blocks',st.blocks);drawBlocks();s
 async function snapRoad(pts){try{const j=await orsPost('driving-car',{coordinates:pts.map(p=>[p[1],p[0]]),instructions:false,preference:'shortest'});
     const c=j.features[0].geometry.coordinates;const step=Math.max(1,Math.floor(c.length/150));const o=[];for(let i=0;i<c.length;i+=step)o.push([+c[i][1].toFixed(6),+c[i][0].toFixed(6)]);
     const l=c[c.length-1];o.push([+l[1].toFixed(6),+l[0].toFixed(6)]);return o}catch(e){return null}}
-async function finishRoad(){if(draft.length<2){toast('Tap at least the start and end corners');return}
-  if(!st.key){dlg.showModal();return}
-  const pts=draft.slice();$('#fshint').textContent='Following the road…';
-  const line=await snapRoad(pts);if(!line)toast('Could not follow the road, so the block uses your taps as drawn');
-  addBlock({type:'road',line:line||pts})}
+function finishRoad(){if(draft.pts.length<2){toast('Tap at least the start and end corners');return}
+  const line=draftLine(),step=Math.max(1,Math.floor(line.length/150)),o=[];for(let i=0;i<line.length;i+=step)o.push([+line[i][1].toFixed(6),+line[i][0].toFixed(6)]);
+  const l=line[line.length-1];o.push([+l[1].toFixed(6),+l[0].toFixed(6)]);addBlock({type:'road',line:o})}
+function finishRoute(){if(draft.pts.length<2){toast('Add at least one more point');return}
+  const coords=draftLine(),dist=draft.dist.reduce((a,b)=>a+b,0),asc=Math.round(draft.asc.reduce((a,b)=>a+b,0));
+  st.routes=[{seed:0,coords,dist,asc,custom:true,sim:0}];st.sel=0;setMode('start');setFs(false);draw();
+  toast('Your route is ready: send it to your watch below');setTimeout(()=>$('#opts').scrollIntoView({behavior:'smooth',block:'start'}),300)}
 map.on('click',e=>{const ll=[+e.latlng.lat.toFixed(6),+e.latlng.lng.toFixed(6)];
   if(mode==='spot'){addBlock({type:'spot',pts:[ll]});return}
-  if(mode==='road'){draft.push(ll);drawDraft();return}
+  if(mode==='road'||mode==='route'){addPoint(ll);return}
   setStart(ll)});
 drawBlocks();
 // ---------- block by name, using OpenStreetMap data ----------
@@ -420,8 +454,8 @@ function draw(){
   if(lines[st.sel])lines[st.sel].bringToFront();
   $('#opts').innerHTML=st.routes.map((r,i)=>{const sel=i===st.sel;
     return `<div><button type="button" class="opt" style="--c:${COLORS[i]}" data-i="${i}" aria-pressed="${sel}">
-      <b>${LETTERS[i]} · ${(r.dist/1000).toFixed(1)} km</b><span class="tag">↑ ${r.asc} m</span>${r.sim>0.6?'<span class="tag warn">Similar to a recent run</span>':''}
-      <div style="margin-top:4px">${(()=>{const t=parseFloat($('#km').value)*1000,d=r.dist-t;return Math.abs(d)>t*0.06?`<span class="tag warn" style="margin-left:0">${d>0?'+':''}${(d/1000).toFixed(1)} km vs plan</span>`:''})()}<span class="tag${(r.main||0)>0.15?' warn':''}" style="margin-left:${0}">Main roads ${Math.round((r.main||0)*100)}%</span><span class="tag${st.surface==='paved'&&r.unpaved>0.05?' warn':''}">Unpaved ${Math.round((r.unpaved||0)*100)}%</span>${r.along>=150?`<span class="tag warn">${r.along} m on a blocked road</span>`:''}</div>
+      <b>${r.custom?'Your route':LETTERS[i]} · ${(r.dist/1000).toFixed(1)} km</b><span class="tag">↑ ${r.asc} m</span>${r.sim>0.6?'<span class="tag warn">Similar to a recent run</span>':''}
+      <div style="margin-top:4px">${(()=>{const t=parseFloat($('#km').value)*1000,d=r.dist-t;return Math.abs(d)>t*0.06?`<span class="tag warn" style="margin-left:0">${d>0?'+':''}${(d/1000).toFixed(1)} km vs plan</span>`:''})()}${r.custom?'':`<span class="tag${(r.main||0)>0.15?' warn':''}">Main roads ${Math.round((r.main||0)*100)}%</span><span class="tag${st.surface==='paved'&&r.unpaved>0.05?' warn':''}">Unpaved ${Math.round((r.unpaved||0)*100)}%</span>`}${r.along>=150?`<span class="tag warn">${r.along} m on a blocked road</span>`:''}</div>
       ${sel?elevSvg(r.coords,COLORS[i]):'<div class="k">Tap to select</div>'}</button>
       ${sel?`<div class="acts"><button type="button" class="pri full" data-a="send">Send to watch (GPX)</button>
         <button type="button" data-a="run">✓ Mark as run</button><button type="button" data-a="dl">Download GPX</button></div>`:''}</div>`}).join('')+
