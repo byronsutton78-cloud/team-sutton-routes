@@ -184,8 +184,11 @@ async function orsRound(seed,len){
   const body={coordinates:[[st.start[1],st.start[0]]],elevation:true,instructions:false,
     options:{round_trip:{length:Math.round(len),points:5,seed}}};
   const w=weightings();if(w)body.options.profile_params={weightings:w};
-  const r=await fetch(`https://api.openrouteservice.org/v2/directions/${prof}/geojson`,{method:'POST',
-    headers:{'Authorization':st.key,'Content-Type':'application/json','Accept':'application/geo+json, application/json'},body:JSON.stringify(body)});
+  const opts={method:'POST',headers:{'Authorization':st.key,'Content-Type':'application/json','Accept':'application/geo+json, application/json'},body:JSON.stringify(body)};
+  let r;
+  try{r=await fetch(`https://api.heigit.org/openrouteservice/v2/directions/${prof}/geojson`,opts)}
+  catch(e){// fall back to the old address while it still runs
+    r=await fetch(`https://api.openrouteservice.org/v2/directions/${prof}/geojson`,opts)}
   const j=await r.json().catch(()=>({}));
   if(!r.ok){const m=(j.error&&(j.error.message||j.error))||j.message||('error '+r.status);const e=new Error(String(m));e.status=r.status;throw e}
   const f=j.features&&j.features[0];if(!f)throw new Error('No route found from here');
@@ -222,7 +225,7 @@ $('#b_go').onclick=async()=>{
   if(!ok.length){const e=res[0].reason||{};let m=e.message||'Something went wrong';
     if(e.status===401||e.status===403)m='Your OpenRouteService key was rejected. Check it in ⚙︎ Settings.';
     else if(e.status===429)m='Daily or per-minute limit reached on your free key. Try again in a minute.';
-    else if(/fetch|network|load failed/i.test(m))m='No connection to the route service. Check your signal and try again.';
+    else if(/fetch|network|load failed/i.test(m))m='The route service did not answer. Check your signal. If your signal is fine, your key may be wrong: check it in ⚙︎ Settings (no spaces before or after).';
     $('#err').innerHTML=`<div class="err">${esc(m)}</div>`;return}
   const hist=LS.get('hist',[]).slice(0,3);const sets=hist.map(h=>cellsOf(h.coords||[]));
   ok.forEach(r=>{r.sim=sets.length?Math.max(...sets.map(s=>overlap(r.coords,s))):0});
