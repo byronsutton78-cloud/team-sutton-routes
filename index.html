@@ -17,7 +17,21 @@ header h1 span{color:var(--acc)}
 button{font:inherit;color:inherit;background:var(--soft);border:1px solid var(--line);border-radius:12px;min-height:44px;padding:0 14px;cursor:pointer}
 button.pri{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600;width:100%}
 button:disabled{opacity:.5}
-#map{height:46vh;min-height:260px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+#map{height:58vh;min-height:300px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+#map.fs{position:fixed;inset:0;height:auto;min-height:0;z-index:1500;border:0}
+.fsbtn{background:#fff;color:#111;border:2px solid rgba(0,0,0,.2);border-radius:8px;min-height:40px;padding:0 12px;font-weight:600;font-size:15px}
+#fsbar,#fshint{display:none;position:fixed;left:10px;right:10px;z-index:1600}
+#fsbar{bottom:calc(14px + env(safe-area-inset-bottom));gap:8px;justify-content:center;flex-wrap:wrap}
+#fsbar button{background:#101418ee;color:#fff;border-color:#3a4652;min-height:46px;flex:1;max-width:200px}
+#fsbar button.on{background:#7a1f1f;border-color:#e04a4a}
+#fsbar button.done{background:var(--acc);border-color:var(--acc);font-weight:700}
+#fshint{top:calc(10px + env(safe-area-inset-top));background:#000d;color:#fff;border-radius:12px;padding:8px 12px;font-size:14px;text-align:center;margin-right:110px}
+body.fsm #fsbar{display:flex}body.fsm #fshint{display:block}
+@media (min-width:900px){
+  .lay{display:grid;grid-template-columns:1fr 440px;height:calc(100vh - 64px)}
+  .lay #map:not(.fs){height:100%;min-height:0;border-bottom:0}
+  .lay main{overflow-y:auto;max-width:none;margin:0;border-left:1px solid var(--line)}
+}
 main{padding:14px;padding-bottom:calc(30px + env(safe-area-inset-bottom));max-width:640px;margin:0 auto}
 .plan{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px 12px;margin-bottom:12px}
 .k{color:var(--mute);font-size:13px}
@@ -55,7 +69,14 @@ a{color:#7fb2ff}
   <h1>Team Sutton <span>Routes</span></h1>
   <button type="button" id="b_set" aria-label="Settings">⚙︎</button>
 </header>
+<div class="lay">
 <div id="map" role="application" aria-label="Map. Tap to set the start point."></div>
+<div id="fshint" role="status"></div>
+<div id="fsbar">
+  <button type="button" data-m="spot">🚫 Block spot</button>
+  <button type="button" data-m="stretch">🚧 Block road</button>
+  <button type="button" class="done" id="fs_done">Done</button>
+</div>
 <main>
   <div class="plan" id="plan" hidden></div>
 
@@ -103,6 +124,7 @@ a{color:#7fb2ff}
 
   <p class="k" style="margin-top:22px">Map © OpenStreetMap contributors · Routes © openrouteservice.org</p>
 </main>
+</div>
 
 <dialog id="dlg">
   <form method="dialog" id="dform">
@@ -176,7 +198,20 @@ const DEF_HINT=$('#blkHint').textContent;
 function setMode(m){mode=m;stretchA=null;if(tmpPin){map.removeLayer(tmpPin);tmpPin=null}
   document.querySelectorAll('#blk button').forEach(b=>b.classList.toggle('on',b.dataset.m===m));
   $('#blkHint').textContent=m==='spot'?'Tap the map on the spot to block (for example the fuel station).':m==='stretch'?'Tap one end of the road stretch to block.':DEF_HINT;
-  if(m!=='start')document.getElementById('map').scrollIntoView({behavior:'smooth',block:'start'})}
+  document.querySelectorAll('#fsbar [data-m]').forEach(b=>b.classList.toggle('on',b.dataset.m===m));
+  $('#fshint').textContent=m==='start'?'Pinch to zoom. Tap a route to select it, or block a spot or road below.':$('#blkHint').textContent;
+  if(m!=='start'&&!isFs())setFs(true)}
+const isFs=()=>document.body.classList.contains('fsm');
+function setFs(on){document.body.classList.toggle('fsm',on);$('#map').classList.toggle('fs',on);
+  if(fsCtl)fsCtl.textContent=on?'✕ Close':'⤢ Full screen';if(!on&&mode!=='start')setMode('start');
+  if(on)$('#fshint').textContent=mode==='start'?'Pinch to zoom. Tap a route to select it, or block a spot or road below.':$('#blkHint').textContent;
+  setTimeout(()=>{map.invalidateSize();if(!on&&lines[st.sel])map.fitBounds(lines[st.sel].getBounds(),{padding:[24,24]})},80)}
+let fsCtl=null;
+const FsC=L.Control.extend({options:{position:'topright'},onAdd(){const b=L.DomUtil.create('button','fsbtn');b.type='button';b.textContent='⤢ Full screen';
+  L.DomEvent.disableClickPropagation(b);b.onclick=()=>setFs(!isFs());fsCtl=b;return b}});
+map.addControl(new FsC());
+$('#fsbar').onclick=e=>{const b=e.target.closest('button');if(!b)return;if(b.id==='fs_done'){setFs(false);return}setMode(mode===b.dataset.m?'start':b.dataset.m)};
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&isFs())setFs(false)});
 $('#blk').onclick=e=>{const b=e.target.closest('button');if(!b)return;setMode(mode===b.dataset.m?'start':b.dataset.m)};
 function ring(b){const la=b.pts[0][0],mLat=110540,mLng=111320*Math.cos(la*Math.PI/180),o=[];
   if(b.type==='spot'){const [y,x]=b.pts[0],r=40;for(let i=0;i<12;i++){const a=2*Math.PI*i/12;o.push([x+r*Math.sin(a)/mLng,y+r*Math.cos(a)/mLat])}}
@@ -187,10 +222,10 @@ function drawBlocks(){blkLayer.clearLayers();st.blocks.forEach(b=>L.polygon(ring
   $('#blkList').innerHTML=st.blocks.length?st.blocks.map((b,i)=>`<div class="blk"><span>${b.type==='spot'?'🚫 Blocked spot':'🚧 Blocked road'} ${i+1}</span><span class="row"><button type="button" data-bs="${i}">Show</button><button type="button" data-bd="${i}" aria-label="Remove">✕</button></span></div>`).join('')+
     (st.blocks.length>1?'<div style="margin-top:6px"><button type="button" data-bc="1">Clear all</button></div>':''):''}
 $('#blkList').onclick=e=>{const s=e.target.closest('[data-bs]'),d=e.target.closest('[data-bd]'),c=e.target.closest('[data-bc]');
-  if(s){const b=st.blocks[+s.dataset.bs];map.setView(b.pts[0],17);document.getElementById('map').scrollIntoView({behavior:'smooth'})}
+  if(s){const b=st.blocks[+s.dataset.bs];setFs(true);setTimeout(()=>map.setView(b.pts[0],17),120)}
   if(d){st.blocks.splice(+d.dataset.bd,1);LS.set('blocks',st.blocks);drawBlocks()}
   if(c){if(!c.dataset.arm){c.dataset.arm=1;c.textContent='Tap again to clear all';return}st.blocks=[];LS.set('blocks',st.blocks);drawBlocks()}};
-function addBlock(b){st.blocks.push(b);LS.set('blocks',st.blocks);drawBlocks();setMode('start');toast('Blocked. Tap Find routes to re-plan around it.')}
+function addBlock(b){st.blocks.push(b);LS.set('blocks',st.blocks);drawBlocks();setMode('start');toast(isFs()?'Blocked. Add more, or tap Done and then Find routes.':'Blocked. Tap Find routes to re-plan around it.')}
 map.on('click',e=>{const ll=[+e.latlng.lat.toFixed(6),+e.latlng.lng.toFixed(6)];
   if(mode==='spot'){addBlock({type:'spot',pts:[ll]});return}
   if(mode==='stretch'){if(!stretchA){stretchA=ll;tmpPin=L.circleMarker(ll,{radius:7,color:'#e04a4a'}).addTo(map);$('#blkHint').textContent='Now tap the other end of the stretch, further along the same road.';return}
