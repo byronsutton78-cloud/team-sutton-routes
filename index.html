@@ -29,7 +29,11 @@ button:disabled{opacity:.5}
 #xhair{display:none;position:fixed;left:50%;top:50%;width:34px;height:34px;margin:-17px 0 0 -17px;z-index:1550;pointer-events:none;
   background:linear-gradient(#ff5a36,#ff5a36) center/2px 100% no-repeat,linear-gradient(#ff5a36,#ff5a36) center/100% 2px no-repeat;border-radius:50%;box-shadow:0 0 0 2px #fff8 inset}
 body.fsm.drawing #xhair{display:block}
-body.fsm #fsbar{display:flex}body.fsm #fshint{display:block}
+body.fsm>header,body.fsm main{display:none!important}
+body.fsm .lay{display:block!important;height:auto!important}
+body.fsm #map{height:100vh!important;height:100dvh!important}
+body.fsm #fsbar{display:flex}
+body.fsm .leaflet-bottom{bottom:calc(76px + env(safe-area-inset-bottom))}body.fsm #fshint{display:block}
 @media (min-width:900px){
   .lay{display:grid;grid-template-columns:1fr 440px;height:calc(100vh - 64px)}
   .lay #map:not(.fs){height:100%;min-height:0;border-bottom:0}
@@ -141,7 +145,7 @@ a{color:#7fb2ff}
   <div class="k" style="margin-bottom:4px">Routes you've marked as run. New options that overlap your last runs get a "Similar" tag, so Riley doesn't get a repeat.</div>
   <div id="hist"></div>
 
-  <p class="k" style="margin-top:22px">Map © OpenStreetMap contributors · Routes © openrouteservice.org</p>
+  <p class="k" style="margin-top:22px">Map © OpenStreetMap contributors · Routes © openrouteservice.org · version 27 Nov 21:15</p>
 </main>
 </div>
 
@@ -233,7 +237,7 @@ function setMode(m){mode=m;draft={pts:[],segs:[],dist:[],asc:[]};draftLayer.clea
   if(m==='route'&&st.start)addPoint(st.start);
   if(m!=='start'&&!isFs())setFs(true)}
 const isFs=()=>document.body.classList.contains('fsm');
-function setFs(on){document.body.classList.toggle('fsm',on);$('#map').classList.toggle('fs',on);
+function setFs(on){if(on)window.scrollTo(0,0);document.body.classList.toggle('fsm',on);$('#map').classList.toggle('fs',on);
   if(fsCtl)fsCtl.textContent=on?'✕ Close':'⤢ Full screen';if(!on&&mode!=='start')setMode('start');
   if(on)$('#fshint').textContent=HINT[mode]||FS_HINT;
   setTimeout(()=>{map.invalidateSize();if(!on&&lines[st.sel])map.fitBounds(lines[st.sel].getBounds(),{padding:[24,24]})},80)}
