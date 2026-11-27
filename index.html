@@ -18,7 +18,7 @@ button{font:inherit;color:inherit;background:var(--soft);border:1px solid var(--
 button.pri{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600;width:100%}
 button:disabled{opacity:.5}
 #map{height:58vh;min-height:300px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
-#map.fs{position:fixed;inset:0;height:auto;min-height:0;z-index:1500;border:0}
+#map.fs{position:fixed!important;top:0;left:0;right:0;bottom:0;width:100%!important;height:100%!important;min-height:0;z-index:1500;border:0}
 .fsbtn{background:#fff;color:#111;border:2px solid rgba(0,0,0,.2);border-radius:8px;min-height:40px;padding:0 12px;font-weight:600;font-size:15px}
 #fsbar,#fshint{display:none;position:fixed;left:10px;right:10px;z-index:1600}
 #fsbar{bottom:calc(14px + env(safe-area-inset-bottom));gap:8px;justify-content:center;flex-wrap:wrap}
@@ -307,7 +307,7 @@ async function editApply(){if(!ed||ed.i2==null)return;if(!ed.via.length){toast('
   if(busy)return;busy=true;$('#fshint').textContent='Rerouting that section…';
   const c=ed.r.coords,a=Math.min(ed.i1,ed.i2),b=Math.max(ed.i1,ed.i2);
   // keep the via points in running order from the section start
-  const pts=[[c[a][1],c[a][0]]].concat(ed.via.map(p=>[p[1],p[0]]),[[c[b][1],c[b][0]]]);
+  const pts=[[c[a][0],c[a][1]]].concat(ed.via.map(p=>[p[1],p[0]]),[[c[b][0],c[b][1]]]);
   try{const j=await orsPost(st.surface==='trail'?'foot-hiking':'foot-walking',{coordinates:pts,elevation:true,instructions:false});
     const seg=j.features[0].geometry.coordinates;const nc=c.slice(0,a).concat(seg,c.slice(b+1));
     const s2=routeStats(nc);const nr=Object.assign({},ed.r,{coords:nc,dist:s2.dist,asc:s2.asc,prev:ed.r,along:alongBlocked(nc)});
