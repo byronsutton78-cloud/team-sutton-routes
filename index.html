@@ -222,7 +222,7 @@ const DEF_HINT=$('#blkHint').textContent,FS_HINT='Pinch to zoom. Tap a route to 
 // older straight-line blocks become road lines
 st.blocks=st.blocks.map(b=>b.type==='stretch'?{type:'road',line:b.pts}:b);
 const HINT={edit1:'Tap the route where the part you want to change STARTS (or line up the cross and tap ＋ Place point).',edit2:'Now tap the route where that part ENDS.',
-  editvia:'Tap the street you would rather run, one street up or down. Add more points if needed, then tap ✓ Reroute section.',route:'Tap the map, or line the cross up and tap ＋ Place point. Each point follows the streets from the last one.',spot:'Tap the spot to block, for example the fuel station.',road:'Tap the start corner, then a few points along the road, then the end corner. Then tap ✓ Finish road.'};
+  editvia:'Tap the street you would rather run, one street up or down. Add more points if needed, then tap ✓ Reroute section.',route:'Tap the map, or line the cross up and tap ＋ Place point. Each point follows the streets from the last one.',spot:'Tap the spot to block, for example the fuel station.',road:'Tap the start corner, then the end corner. Add a middle point only if the red line takes the wrong way. Then tap ✓ Block road. Both sides of an island get blocked.'};
 function setMode(m){mode=m;draft={pts:[],segs:[],dist:[],asc:[]};draftLayer.clearLayers();if(!/^edit/.test(m)){ed=null;editLayer.clearLayers()}const dr=m==='road'||m==='route'||/^edit/.test(m);
   document.body.classList.toggle('drawing',dr);
   document.querySelectorAll('#blk button,#fsbar [data-m]').forEach(b=>{b.classList.toggle('on',b.dataset.m===m);b.hidden=dr});
@@ -275,7 +275,7 @@ async function addPoint(ll){if(busy)return;const prev=draft.pts[draft.pts.length
   draft.segs.push(seg);draft.dist.push(dist);draft.asc.push(asc);busy=false;drawDraft()}
 function drawBlocks(){blkLayer.clearLayers();
   st.blocks.forEach(b=>{if(b.type==='spot')L.polygon(ring(b).map(c=>[c[1],c[0]]),{color:'#e04a4a',weight:2,fillOpacity:.35}).addTo(blkLayer);
-    else L.polyline(b.line,{color:'#e04a4a',weight:9,opacity:.5,lineCap:'round'}).addTo(blkLayer)});
+    else[b.line,b.line2].filter(Boolean).forEach(l=>L.polyline(l,{color:'#e04a4a',weight:9,opacity:.5,lineCap:'round'}).addTo(blkLayer))});
   $('#blkList').innerHTML=st.blocks.length?st.blocks.map((b,i)=>`<div class="blk"><span>${b.type==='spot'?'🚫 Spot '+(i+1):'🚧 '+esc(b.name||'Road '+(i+1))}</span><span class="row"><button type="button" data-bs="${i}">Show</button><button type="button" data-bd="${i}" aria-label="Remove">✕</button></span></div>`).join('')+
     (st.blocks.length>1?'<div style="margin-top:6px"><button type="button" data-bc="1">Clear all</button></div>':''):'';
   $('#blkSync').hidden=!st.blocks.length}
@@ -343,9 +343,13 @@ function addBlock(b){st.blocks.push(b);LS.set('blocks',st.blocks);drawBlocks();s
 async function snapRoad(pts){try{const j=await orsPost('driving-car',{coordinates:pts.map(p=>[p[1],p[0]]),instructions:false,preference:'shortest'});
     const c=j.features[0].geometry.coordinates;const step=Math.max(1,Math.floor(c.length/150));const o=[];for(let i=0;i<c.length;i+=step)o.push([+c[i][1].toFixed(6),+c[i][0].toFixed(6)]);
     const l=c[c.length-1];o.push([+l[1].toFixed(6),+l[0].toFixed(6)]);return o}catch(e){return null}}
-function finishRoad(){if(draft.pts.length<2){toast('Tap at least the start and end corners');return}
+async function finishRoad(){if(draft.pts.length<2){toast('Tap at least the start and end corners');return}if(busy)return;
   const line=draftLine(),step=Math.max(1,Math.floor(line.length/150)),o=[];for(let i=0;i<line.length;i+=step)o.push([+line[i][1].toFixed(6),+line[i][0].toFixed(6)]);
-  const l=line[line.length-1];o.push([+l[1].toFixed(6),+l[0].toFixed(6)]);addBlock({type:'road',line:o})}
+  const l=line[line.length-1];o.push([+l[1].toFixed(6),+l[0].toFixed(6)]);
+  busy=true;$('#fshint').textContent='Checking the other side of the road…';const back=await snapRoad(draft.pts.slice().reverse());busy=false;
+  addBlock({type:'road',line:o,line2:back&&!sameLine(o,back)?back:null})}
+// true when the way back runs on the same carriageway (an ordinary two-way road)
+function sameLine(a,b){let n=0;for(const p of b)if(a.some(q=>map.distance(p,q)<8))n++;return n/b.length>0.85}
 function finishRoute(){if(draft.pts.length<2){toast('Add at least one more point');return}
   const coords=draftLine(),dist=draft.dist.reduce((a,b)=>a+b,0),asc=Math.round(draft.asc.reduce((a,b)=>a+b,0));
   st.routes=[{seed:0,coords,dist,asc,custom:true,sim:0}];st.sel=0;setMode('start');setFs(false);draw();
@@ -361,15 +365,22 @@ async function overpass(q){for(const u of ['https://overpass-api.de/api/interpre
     try{const r=await fetch(u,{method:'POST',body:'data='+encodeURIComponent(q),headers:{'Content-Type':'application/x-www-form-urlencoded'}});if(r.ok)return await r.json()}catch(e){}}
   throw new Error('The map data service did not answer. Try again in a minute.')}
 const nameRx=t=>'^'+String(t).trim().replace(/\b(road|rd|street|st|avenue|ave|drive|dr|crescent|cres|lane|ln|way|close|boulevard|blvd|weg|straat|laan|singel)\.?$/i,'').trim().replace(/[^A-Za-z0-9 ]/g,'.');
-async function corner(road,cross){const c0=map.getCenter(),[la,ln]=st.start||[c0.lat,c0.lng];
-  const j=await overpass(`[out:json][timeout:25];way["highway"]["name"~"${nameRx(road)}",i](around:8000,${la},${ln})->.r;way["highway"]["name"~"${nameRx(cross)}",i](around:8000,${la},${ln})->.c;node(w.r)->.rn;node(w.c)->.cn;node.rn.cn;out;`);
-  const n=(j.elements||[]).filter(e=>e.type==='node');if(!n.length)throw new Error(`Couldn't find where ${road} meets ${cross}. Check the spelling.`);
-  n.sort((a,b)=>Math.hypot(a.lat-la,a.lon-ln)-Math.hypot(b.lat-la,b.lon-ln));return [n[0].lat,n[0].lon]}
+async function corner(road,cross){const c0=map.getCenter(),[la,ln]=st.start||[c0.lat,c0.lng];const rr=nameRx(road),cr=nameRx(cross),A=`(around:8000,${la},${ln})`;
+  const j=await overpass(`[out:json][timeout:25];way["highway"]["name"~"${rr}",i]${A};out tags geom;way["highway"]["name"~"${cr}",i]${A};out tags geom;`);
+  const ws=(j.elements||[]).filter(e=>e.type==='way'&&e.geometry),re1=new RegExp(rr,'i'),re2=new RegExp(cr,'i');
+  const rw=ws.filter(w=>re1.test((w.tags||{}).name||'')),cw=ws.filter(w=>re2.test((w.tags||{}).name||''));
+  if(!rw.length)throw new Error(`Couldn't find a road called "${road}" near your start. Check the spelling.`);
+  if(!cw.length)throw new Error(`Couldn't find a road called "${cross}" near your start. Check the spelling.`);
+  const rp=rw.flatMap(w=>w.geometry),cp=cw.flatMap(w=>w.geometry),hits=[];
+  for(const p of rp)for(const q of cp){const d=map.distance([p.lat,p.lon],[q.lat,q.lon]);if(d<30)hits.push({lat:(p.lat+q.lat)/2,lon:(p.lon+q.lon)/2,d})}
+  if(!hits.length)throw new Error(`${road} and ${cross} don't seem to meet near your start.`);
+  hits.sort((a,b)=>map.distance([a.lat,a.lon],[la,ln])-map.distance([b.lat,b.lon],[la,ln]));return [+hits[0].lat.toFixed(6),+hits[0].lon.toFixed(6)]}
 $('#bn_go').onclick=async()=>{const r=$('#bn_road').value.trim(),a=$('#bn_a').value.trim(),b=$('#bn_b').value.trim();
   if(!r||!a||!b){toast('Fill in the road and both corners');return}if(!st.key){dlg.showModal();return}
   const btn=$('#bn_go');btn.disabled=true;btn.textContent='Finding the corners…';
   try{const [A,B]=await Promise.all([corner(r,a),corner(r,b)]);btn.textContent='Following the road…';
-    const line=await snapRoad([A,B]);addBlock({type:'road',line:line||[A,B],name:`${r}: ${a} to ${b}`});
+    const line=await snapRoad([A,B]),back=await snapRoad([B,A]);
+    addBlock({type:'road',line:line||[A,B],line2:back&&line&&!sameLine(line,back)?back:null,name:`${r}: ${a} to ${b}`});
     $('#bn_a').value=$('#bn_b').value='';setFs(true);setTimeout(()=>map.fitBounds(L.latLngBounds(line||[A,B]),{padding:[40,40]}),120)}
   catch(e){toast(e.message||'Could not block that road')}
   btn.disabled=false;btn.textContent='Block this stretch'};
@@ -393,9 +404,9 @@ function drawAreas(polys){areaLayer.clearLayers();polys.forEach(r=>L.polygon(r.m
 // ---------- how much of a route runs along a blocked road ----------
 function alongBlocked(coords){const roads=st.blocks.filter(b=>b.type==='road');if(!roads.length)return 0;
   const [mLat,mLng]=mPer(st.start[0]),P=(la,ln)=>[ln*mLng,la*mLat];
-  const segs=[];roads.forEach(b=>{for(let i=0;i<b.line.length-1;i++)segs.push([P(...b.line[i]),P(...b.line[i+1])])});
+  const segs=[];roads.forEach(b=>[b.line,b.line2].filter(Boolean).forEach(l=>{for(let i=0;i<l.length-1;i++)segs.push([P(...l[i]),P(...l[i+1])])}));
   const near=p=>segs.some(([a,b])=>{const dx=b[0]-a[0],dy=b[1]-a[1],L2=dx*dx+dy*dy;let t=L2?((p[0]-a[0])*dx+(p[1]-a[1])*dy)/L2:0;t=Math.max(0,Math.min(1,t));
-    return Math.hypot(p[0]-a[0]-t*dx,p[1]-a[1]-t*dy)<20});
+    return Math.hypot(p[0]-a[0]-t*dx,p[1]-a[1]-t*dy)<25});
   const pts=coords.map(c=>P(c[1],c[0])),nr=pts.map(near);let tot=0;const d=[];for(let i=0;i<pts.length-1;i++){d.push(Math.hypot(pts[i+1][0]-pts[i][0],pts[i+1][1]-pts[i][1]));tot+=d[i]}
   let m=0,run=0;for(let i=0;i<d.length;i++){const at=run;run+=d[i];if(at<250||run>tot-250)continue;if(nr[i]&&nr[i+1])m+=d[i]}return Math.round(m)}
 function locate(quiet){if(!navigator.geolocation){if(!quiet)toast('Location not available on this browser');return}
