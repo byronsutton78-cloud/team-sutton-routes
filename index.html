@@ -145,7 +145,7 @@ a{color:#7fb2ff}
   <div class="k" style="margin-bottom:4px">Routes you've marked as run. New options that overlap your last runs get a "Similar" tag, so Riley doesn't get a repeat.</div>
   <div id="hist"></div>
 
-  <p class="k" style="margin-top:22px">Map © OpenStreetMap contributors · Routes © openrouteservice.org · version 27 Nov 21:15</p>
+  <p class="k" style="margin-top:22px">Map © OpenStreetMap contributors · Routes © openrouteservice.org · version 27 Nov 21:50</p>
 </main>
 </div>
 
@@ -226,13 +226,15 @@ const DEF_HINT=$('#blkHint').textContent,FS_HINT='Pinch to zoom. Tap a route to 
 // older straight-line blocks become road lines
 st.blocks=st.blocks.map(b=>b.type==='stretch'?{type:'road',line:b.pts}:b);
 const HINT={edit1:'Tap the route where the part you want to change STARTS (or line up the cross and tap ＋ Place point).',edit2:'Now tap the route where that part ENDS.',
-  editvia:'Tap the street you would rather run, one street up or down. Add more points if needed, then tap ✓ Reroute section.',route:'Tap the map, or line the cross up and tap ＋ Place point. Each point follows the streets from the last one.',spot:'Tap the spot to block, for example the fuel station.',road:'Tap the start corner, then the end corner. Add a middle point only if the red line takes the wrong way. Then tap ✓ Block road. Both sides of an island get blocked.'};
+  editvia:'To just cut this part out, tap ✓ Reroute now. To use another street, first tap the MIDDLE of that street, then ✓ Reroute.',
+  editprev:'',route:'Tap the map, or line the cross up and tap ＋ Place point. Each point follows the streets from the last one.',spot:'Tap the spot to block, for example the fuel station.',road:'Tap the start corner, then the end corner. Add a middle point only if the red line takes the wrong way. Then tap ✓ Block road. Both sides of an island get blocked.'};
 function setMode(m){mode=m;draft={pts:[],segs:[],dist:[],asc:[]};draftLayer.clearLayers();if(!/^edit/.test(m)){ed=null;editLayer.clearLayers()}const dr=m==='road'||m==='route'||/^edit/.test(m);
   document.body.classList.toggle('drawing',dr);
   document.querySelectorAll('#blk button,#fsbar [data-m]').forEach(b=>{b.classList.toggle('on',b.dataset.m===m);b.hidden=dr});
   $('#fs_undo').hidden=$('#fs_place').hidden=$('#fs_fin').hidden=!dr;$('#fs_loop').hidden=m!=='route';$('#fs_done').hidden=dr;
   $('#fs_fin').textContent=m==='road'?'✓ Block road':/^edit/.test(m)?'✓ Reroute section':'✓ Use route';
-  if(/^edit/.test(m)){$('#fs_undo').hidden=m==='edit1';$('#fs_fin').hidden=m!=='editvia'}
+  if(/^edit/.test(m)){$('#fs_undo').hidden=m==='edit1';$('#fs_fin').hidden=!(m==='editvia'||m==='editprev');$('#fs_place').hidden=m==='editprev';
+    $('#fs_fin').textContent=m==='editprev'?'✓ Keep change':'✓ Reroute';$('#fs_undo').textContent=m==='editprev'?'↶ Try again':'↶ Undo'}
   $('#blkHint').textContent=m==='route'?DEF_HINT:(HINT[m]||DEF_HINT);$('#fshint').textContent=HINT[m]||FS_HINT;
   if(m==='route'&&st.start)addPoint(st.start);
   if(m!=='start'&&!isFs())setFs(true)}
@@ -296,28 +298,36 @@ function drawEdit(){editLayer.clearLayers();if(!ed)return;const c=ed.r.coords;
   const mk=(i,col)=>L.circleMarker([c[i][1],c[i][0]],{radius:8,color:'#fff',weight:2,fillColor:col,fillOpacity:1}).addTo(editLayer);
   if(ed.i1!=null)mk(ed.i1,'#e04a4a');
   if(ed.i2!=null){const a=Math.min(ed.i1,ed.i2),b=Math.max(ed.i1,ed.i2);L.polyline(c.slice(a,b+1).map(x=>[x[1],x[0]]),{color:'#e04a4a',weight:8,opacity:.6,dashArray:'8 8'}).addTo(editLayer);mk(ed.i2,'#e04a4a')}
-  ed.via.forEach(p=>L.circleMarker(p,{radius:6,color:'#fff',weight:2,fillColor:'#19b37a',fillOpacity:1}).addTo(editLayer))}
+  ed.via.forEach(p=>L.circleMarker(p,{radius:6,color:'#fff',weight:2,fillColor:'#19b37a',fillOpacity:1}).addTo(editLayer));
+  if(ed.seg)L.polyline(ed.seg.map(x=>[x[1],x[0]]),{color:'#19b37a',weight:7,opacity:.95}).addTo(editLayer)}
 function startEdit(){const r=st.routes[st.sel];if(!r)return;if(!st.key){dlg.showModal();return}
-  ed={r,i1:null,i2:null,via:[]};setMode('edit1');ed={r,i1:null,i2:null,via:[]};drawEdit();setTimeout(()=>map.fitBounds(lines[st.sel].getBounds(),{padding:[30,30]}),150)}
+  ed={r,i1:null,i2:null,via:[],seg:null};setMode('edit1');ed={r,i1:null,i2:null,via:[],seg:null};drawEdit();setTimeout(()=>map.fitBounds(lines[st.sel].getBounds(),{padding:[30,30]}),150)}
 function editTap(ll){if(!ed)return;
   if(mode==='edit1'||mode==='edit2'){const [i,d]=nearestIdx(ed.r.coords,ll);if(d>60){toast('Tap closer to the route line');return}
     if(mode==='edit1'){ed.i1=i;drawEdit();setMode2('edit2')}else{if(Math.abs(i-ed.i1)<2){toast('Pick an end point further along the route');return}ed.i2=i;drawEdit();setMode2('editvia')}return}
+  if(mode==='editprev')return;
   if(mode==='editvia'){ed.via.push([+(+ll[0]).toFixed(6),+(+ll[1]).toFixed(6)]);drawEdit();$('#fshint').textContent=`${ed.via.length} new point${ed.via.length>1?'s':''}. Add more, or tap ✓ Reroute section.`}}
 // switch between edit steps without clearing the edit
 function setMode2(m){const keep=ed;setMode(m);ed=keep;drawEdit()}
-function editUndo(){if(!ed)return;if(mode==='editvia'&&ed.via.length){ed.via.pop();drawEdit();return}
+function editUndo(){if(!ed)return;if(mode==='editprev'){ed.seg=null;ed.via=[];drawEdit();setMode2('editvia');return}if(mode==='editvia'&&ed.via.length){ed.via.pop();drawEdit();return}
   if(mode==='editvia'){ed.i2=null;drawEdit();setMode2('edit2');return}if(mode==='edit2'){ed.i1=null;drawEdit();setMode2('edit1')}}
-async function editApply(){if(!ed||ed.i2==null)return;if(!ed.via.length){toast('Tap at least one point on the street you would rather use');return}
-  if(busy)return;busy=true;$('#fshint').textContent='Rerouting that section…';
+// cut out-and-back spurs and small loops from a rerouted piece
+function despur(c){const o=[];for(const p of c){let k=-1;for(let j=o.length-2;j>=0;j--)if(map.distance([o[j][1],o[j][0]],[p[1],p[0]])<8){k=j;break}
+  if(k>=0)o.length=k+1;else o.push(p)}return o}
+async function editApply(){if(!ed||ed.i2==null)return;
+  if(mode==='editprev'){const c=ed.r.coords,a=Math.min(ed.i1,ed.i2),b=Math.max(ed.i1,ed.i2);const nc=c.slice(0,a).concat(ed.seg,c.slice(b+1));
+    const s2=routeStats(nc);st.routes[st.sel]=Object.assign({},ed.r,{coords:nc,dist:s2.dist,asc:s2.asc,prev:ed.r,along:alongBlocked(nc)});
+    setMode('start');setFs(false);draw();toast(`Change kept. Route is now ${(s2.dist/1000).toFixed(2)} km`);
+    setTimeout(()=>$('#opts').scrollIntoView({behavior:'smooth',block:'start'}),300);return}
+  if(busy)return;busy=true;$('#fshint').textContent='Working out the new section…';
   const c=ed.r.coords,a=Math.min(ed.i1,ed.i2),b=Math.max(ed.i1,ed.i2);
-  // keep the via points in running order from the section start
   const pts=[[c[a][0],c[a][1]]].concat(ed.via.map(p=>[p[1],p[0]]),[[c[b][0],c[b][1]]]);
   try{const j=await orsPost(st.surface==='trail'?'foot-hiking':'foot-walking',{coordinates:pts,elevation:true,instructions:false});
-    const seg=j.features[0].geometry.coordinates;const nc=c.slice(0,a).concat(seg,c.slice(b+1));
-    const s2=routeStats(nc);const nr=Object.assign({},ed.r,{coords:nc,dist:s2.dist,asc:s2.asc,prev:ed.r,along:alongBlocked(nc)});
-    st.routes[st.sel]=nr;busy=false;setMode('start');setFs(false);draw();
-    toast(`Section changed. Route is now ${(s2.dist/1000).toFixed(2)} km`);
-    setTimeout(()=>$('#opts').scrollIntoView({behavior:'smooth',block:'start'}),300)}
+    const raw=j.features[0].geometry.coordinates,seg=despur(raw);busy=false;
+    const len=x=>{let d=0;for(let i=1;i<x.length;i++)d+=map.distance([x[i-1][1],x[i-1][0]],[x[i][1],x[i][0]]);return d};
+    const oldLen=len(c.slice(a,b+1)),newLen=len(seg),cut=len(raw)-newLen;
+    ed.seg=seg;drawEdit();setMode2('editprev');
+    $('#fshint').textContent=`Green is the new section: ${fmtKm(newLen)} instead of ${fmtKm(oldLen)}.`+(ed.via.length&&cut>30?' Your dot was a dead end, so I left out the out-and-back. Try a dot further along the street you want.':'')+' Tap ✓ Keep change, or ↶ Try again.'}
   catch(e){busy=false;$('#fshint').textContent=HINT.editvia;toast(e.status===429?'Free key limit for this minute. Try again shortly.':'Could not reroute through those points. Move them onto a street and try again.')}}
 /* ---------- open a GPX file ---------- */
 $('#b_open').onclick=()=>$('#f_gpx').click();
